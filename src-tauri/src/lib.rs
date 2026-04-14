@@ -6,6 +6,7 @@ pub mod strategies;
 pub mod api;
 pub mod auth;
 pub mod server;
+pub mod notifications;
 
 pub mod state;
 
@@ -14,7 +15,7 @@ pub mod commands;
 
 #[cfg(feature = "tauri-app")]
 mod app {
-    use crate::commands::{auth, data, simulation, optimization, trading};
+    use crate::commands::{auth, data, simulation, optimization, trading, migration, notification};
     use crate::db::schema;
     use crate::state::AppState;
     use crate::strategies::StrategyRegistry;
@@ -64,6 +65,9 @@ mod app {
                 auth::logout,
                 auth::list_users,
                 auth::delete_user,
+                migration::migrate_from_csv,
+                notification::save_notification_config,
+                notification::test_notification,
             ])
             .run(tauri::generate_context!())
             .expect("error while running tauri application");

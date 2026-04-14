@@ -187,3 +187,36 @@ export async function deleteUser(token: string, userId: number): Promise<void> {
   if (isTauri) return tauriInvoke("delete_user", { token, userId });
   throw new Error("User management via PWA not yet implemented");
 }
+
+// --- Notification API ---
+
+export async function saveNotificationConfig(
+  token: string,
+  channel: string,
+  config: string,
+  enabled: boolean
+): Promise<void> {
+  if (isTauri) return tauriInvoke("save_notification_config", { token, channel, config, enabled });
+  throw new Error("Notification config via PWA not yet implemented");
+}
+
+export async function testNotification(
+  token: string,
+  channel: string
+): Promise<string> {
+  if (isTauri) return tauriInvoke("test_notification", { token, channel });
+  throw new Error("Notification test via PWA not yet implemented");
+}
+
+// --- Migration API ---
+
+export interface MigrationResult {
+  hour_records: number;
+  day_records: number;
+  week_records: number;
+}
+
+export async function migrateFromCsv(csvDir: string): Promise<MigrationResult> {
+  if (isTauri) return tauriInvoke("migrate_from_csv", { csvDir });
+  throw new Error("CSV migration is only available in desktop mode");
+}
