@@ -2,5 +2,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    bitcoin_trader_lib::run()
+    #[cfg(feature = "tauri-app")]
+    bitcoin_trader_lib::run();
 }
