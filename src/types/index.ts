@@ -87,4 +87,13 @@ export interface GenerationResult {
 export interface ParetoSolution {
   objectives: number[];
   parameters: Record<string, number>;
+  rank: number;
+  crowding_distance: number;
+}
+
+export interface PositionInfo {
+  status: string;
+  buy_price: number;
+  buy_volume: number;
+  pnl_pct: number;
 }

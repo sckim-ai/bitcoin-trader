@@ -3,6 +3,7 @@ pub mod core;
 pub mod db;
 pub mod migration;
 pub mod strategies;
+pub mod api;
 
 #[cfg(feature = "tauri-app")]
 pub mod commands;
@@ -11,7 +12,7 @@ pub mod state;
 
 #[cfg(feature = "tauri-app")]
 mod app {
-    use crate::commands::{data, simulation};
+    use crate::commands::{data, simulation, optimization, trading};
     use crate::db::schema;
     use crate::state::AppState;
     use crate::strategies::StrategyRegistry;
@@ -34,6 +35,12 @@ mod app {
                 data::get_market_data,
                 simulation::list_strategies,
                 simulation::run_simulation,
+                optimization::start_optimization,
+                trading::get_current_price,
+                trading::get_balance,
+                trading::manual_buy,
+                trading::manual_sell,
+                trading::get_position,
             ])
             .run(tauri::generate_context!())
             .expect("error while running tauri application");
