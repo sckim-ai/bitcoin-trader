@@ -1,0 +1,27 @@
+[package]
+name = "bitcoin-trader"
+version = "0.1.0"
+description = "Bitcoin Trading System"
+authors = ["fairlabs"]
+edition = "2021"
+
+[lib]
+name = "bitcoin_trader_lib"
+crate-type = ["lib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+csv = "1.3"
+rand = "0.8"
+thiserror = "1"
+tokio = { version = "1", features = ["full"] }
+
+[dev-dependencies]
+approx = "0.5"
