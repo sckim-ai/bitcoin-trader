@@ -1,5 +1,7 @@
 pub mod models;
 pub mod core;
+pub mod db;
+pub mod migration;
 
 #[cfg(feature = "tauri-app")]
 mod app {
