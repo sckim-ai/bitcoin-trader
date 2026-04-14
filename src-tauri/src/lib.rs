@@ -2,6 +2,7 @@ pub mod models;
 pub mod core;
 pub mod db;
 pub mod migration;
+pub mod strategies;
 
 #[cfg(feature = "tauri-app")]
 mod app {
