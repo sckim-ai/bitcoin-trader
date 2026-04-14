@@ -78,6 +78,28 @@ pub struct TradingParameters {
     pub v3_fee_rate: f64,
     pub v3_min_hold_bars: i32,
     pub v3_volume_lookback: i32,
+
+    // V4 ML parameters
+    pub v4_train_window: i32,
+    pub v4_retrain_interval: i32,
+    pub v4_buy_threshold: f64,
+    pub v4_sell_threshold: f64,
+    pub v4_stop_loss: f64,
+    pub v4_take_profit: f64,
+    pub v4_fee_rate: f64,
+    pub v4_min_hold_bars: i32,
+
+    // V5 EnhancedAdaptive parameters
+    pub v5_psy_buy_threshold: f64,
+    pub v5_psy_sell_threshold: f64,
+    pub v5_atr_multiplier: f64,
+    pub v5_volume_threshold: f64,
+    pub v5_decay_ratio: f64,
+    pub v5_min_hold_bars: i32,
+    pub v5_stop_loss: f64,
+    pub v5_take_profit: f64,
+    pub v5_fee_rate: f64,
+    pub v5_trailing_atr_bars: i32,
 }
 
 impl Default for TradingParameters {
@@ -151,6 +173,26 @@ impl Default for TradingParameters {
             v3_fee_rate: 0.0005,
             v3_min_hold_bars: 6,
             v3_volume_lookback: 20,
+
+            v4_train_window: 2160,
+            v4_retrain_interval: 720,
+            v4_buy_threshold: 0.005,
+            v4_sell_threshold: -0.003,
+            v4_stop_loss: 0.05,
+            v4_take_profit: 0.08,
+            v4_fee_rate: 0.0005,
+            v4_min_hold_bars: 6,
+
+            v5_psy_buy_threshold: 40.0,
+            v5_psy_sell_threshold: 65.0,
+            v5_atr_multiplier: 2.0,
+            v5_volume_threshold: 10000.0,
+            v5_decay_ratio: 0.3,
+            v5_min_hold_bars: 6,
+            v5_stop_loss: 0.05,
+            v5_take_profit: 0.10,
+            v5_fee_rate: 0.0005,
+            v5_trailing_atr_bars: 14,
         }
     }
 }

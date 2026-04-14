@@ -20,15 +20,17 @@ fn make_flat_data(n: usize) -> Vec<MarketData> {
 }
 
 #[test]
-fn test_registry_has_v0_through_v3() {
+fn test_registry_has_v0_through_v5() {
     let registry = StrategyRegistry::new();
     assert!(registry.get("V0").is_some(), "V0 should be registered");
     assert!(registry.get("V1").is_some(), "V1 should be registered");
     assert!(registry.get("V2").is_some(), "V2 should be registered");
     assert!(registry.get("V3").is_some(), "V3 should be registered");
+    assert!(registry.get("V4").is_some(), "V4 should be registered");
+    assert!(registry.get("V5").is_some(), "V5 should be registered");
 
     let list = registry.list();
-    assert!(list.len() >= 4, "should have at least 4 strategies");
+    assert!(list.len() >= 6, "should have at least 6 strategies");
 }
 
 #[test]
@@ -70,9 +72,27 @@ fn test_v3_runs_without_panic() {
 }
 
 #[test]
+fn test_v4_runs_without_panic() {
+    let registry = StrategyRegistry::new();
+    let v4 = registry.get("V4").unwrap();
+    let data = make_flat_data(100);
+    let params = TradingParameters::default();
+    let _result = v4.run_simulation(&data, &params);
+}
+
+#[test]
+fn test_v5_runs_without_panic() {
+    let registry = StrategyRegistry::new();
+    let v5 = registry.get("V5").unwrap();
+    let data = make_flat_data(100);
+    let params = TradingParameters::default();
+    let _result = v5.run_simulation(&data, &params);
+}
+
+#[test]
 fn test_parameter_ranges_non_empty() {
     let registry = StrategyRegistry::new();
-    for key in &["V0", "V1", "V2", "V3"] {
+    for key in &["V0", "V1", "V2", "V3", "V4", "V5"] {
         let strategy = registry.get(key).unwrap();
         let ranges = strategy.parameter_ranges();
         assert!(
@@ -86,7 +106,7 @@ fn test_parameter_ranges_non_empty() {
 #[test]
 fn test_strategy_names_and_descriptions() {
     let registry = StrategyRegistry::new();
-    for key in &["V0", "V1", "V2", "V3"] {
+    for key in &["V0", "V1", "V2", "V3", "V4", "V5"] {
         let strategy = registry.get(key).unwrap();
         assert!(!strategy.name().is_empty());
         assert!(!strategy.description().is_empty());

@@ -162,7 +162,7 @@ fn test_nsga2_with_v0() {
 fn test_all_strategies_registered() {
     let registry = StrategyRegistry::new();
     let list = registry.list();
-    assert!(list.len() >= 4, "Should have at least 4 strategies, got {}", list.len());
+    assert!(list.len() >= 6, "Should have at least 6 strategies, got {}", list.len());
 }
 
 #[test]

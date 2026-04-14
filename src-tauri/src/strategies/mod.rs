@@ -2,6 +2,8 @@ pub mod volume_decay;
 pub mod enhanced_volume;
 pub mod multi_indicator;
 pub mod regime_adaptive;
+pub mod ml_strategy;
+pub mod enhanced_adaptive;
 
 use crate::core::signals::{PositionState, TradingSignal};
 use crate::models::config::ParameterRange;
@@ -35,6 +37,8 @@ impl StrategyRegistry {
         registry.register("V1", Box::new(enhanced_volume::EnhancedVolumeStrategy));
         registry.register("V2", Box::new(multi_indicator::MultiIndicatorStrategy));
         registry.register("V3", Box::new(regime_adaptive::RegimeAdaptiveStrategy));
+        registry.register("V4", Box::new(ml_strategy::MachineLearningStrategy));
+        registry.register("V5", Box::new(enhanced_adaptive::EnhancedAdaptiveStrategy));
         registry
     }
 
