@@ -4,19 +4,21 @@ pub mod db;
 pub mod migration;
 pub mod strategies;
 pub mod api;
+pub mod auth;
+pub mod server;
 
-#[cfg(feature = "tauri-app")]
-pub mod commands;
-#[cfg(feature = "tauri-app")]
 pub mod state;
 
 #[cfg(feature = "tauri-app")]
+pub mod commands;
+
+#[cfg(feature = "tauri-app")]
 mod app {
-    use crate::commands::{data, simulation, optimization, trading};
+    use crate::commands::{auth, data, simulation, optimization, trading};
     use crate::db::schema;
     use crate::state::AppState;
     use crate::strategies::StrategyRegistry;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     pub fn run() {
         let db_path = dirs_db_path();
@@ -26,6 +28,22 @@ mod app {
             db: Mutex::new(conn),
             registry: StrategyRegistry::new(),
         };
+
+        let server_state = Arc::new(AppState {
+            db: Mutex::new(
+                schema::initialize(&db_path).expect("Failed to initialize server database"),
+            ),
+            registry: StrategyRegistry::new(),
+        });
+
+        let server_state_clone = server_state.clone();
+        std::thread::spawn(move || {
+            tokio::runtime::Runtime::new()
+                .unwrap()
+                .block_on(async {
+                    crate::server::start(server_state_clone, 3741).await;
+                });
+        });
 
         tauri::Builder::default()
             .manage(app_state)
@@ -41,6 +59,11 @@ mod app {
                 trading::manual_buy,
                 trading::manual_sell,
                 trading::get_position,
+                auth::login,
+                auth::register,
+                auth::logout,
+                auth::list_users,
+                auth::delete_user,
             ])
             .run(tauri::generate_context!())
             .expect("error while running tauri application");

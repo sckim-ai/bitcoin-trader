@@ -2,13 +2,35 @@ use rusqlite::{Connection, Result};
 use std::path::Path;
 
 /// Initialize the SQLite database: open (or create) the file, enable WAL + foreign keys,
-/// and run the initial schema migration.
+/// and run all schema migrations.
 pub fn initialize(db_path: &Path) -> Result<Connection> {
     let conn = Connection::open(db_path)?;
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
-    let schema = include_str!("../../migrations/001_initial.sql");
-    conn.execute_batch(schema)?;
+    let schema_v1 = include_str!("../../migrations/001_initial.sql");
+    conn.execute_batch(schema_v1)?;
+    let schema_v2 = include_str!("../../migrations/002_users.sql");
+    conn.execute_batch(schema_v2)?;
+    seed_admin(&conn)?;
     Ok(conn)
+}
+
+/// Seed default admin user if not exists (password: admin123, argon2 hashed at build time).
+fn seed_admin(conn: &Connection) -> Result<()> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM users WHERE username = 'admin'",
+        [],
+        |row| row.get(0),
+    )?;
+    if count == 0 {
+        // Pre-computed argon2 hash — or compute at runtime
+        let hash = crate::auth::password::hash_password("admin123")
+            .unwrap_or_default();
+        conn.execute(
+            "INSERT INTO users (username, password_hash, role) VALUES ('admin', ?1, 'admin')",
+            [&hash],
+        )?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

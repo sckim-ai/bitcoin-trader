@@ -31,6 +31,12 @@ jsonwebtoken = "9"
 uuid = { version = "1", features = ["v4"] }
 sha2 = "0.10"
 hmac = "0.12"
+argon2 = "0.5"
+aes-gcm = "0.10"
+axum = { version = "0.7", features = ["ws"] }
+axum-extra = { version = "0.9", features = ["typed-header"] }
+tower-http = { version = "0.5", features = ["cors"] }
+base64 = "0.22"
 
 [dev-dependencies]
 approx = "0.5"
