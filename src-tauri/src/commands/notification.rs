@@ -1,6 +1,5 @@
 use crate::auth::session;
 use crate::state::AppState;
-use serde_json::json;
 use tauri::State;
 
 #[tauri::command]
@@ -32,12 +31,12 @@ pub async fn test_notification(
     channel: String,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    let user_id = session::validate_session(&conn, &token)?
-        .ok_or("Not authenticated")?;
-
-    let mgr = crate::notifications::manager::NotificationManager::from_db(&conn, user_id);
-    drop(conn); // release lock before async calls
+    let mgr = {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        let user_id = session::validate_session(&conn, &token)?
+            .ok_or("Not authenticated")?;
+        crate::notifications::manager::NotificationManager::from_db(&conn, user_id)
+    }; // conn dropped here, before any await
 
     let test_msg = "BTC Trader 테스트 알림입니다.";
 
