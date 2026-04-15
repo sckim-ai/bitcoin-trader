@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { manualBuy, manualSell } from "../../lib/api";
+import { Button } from "../ui/Button";
+import { Input } from "../ui/Input";
 
 interface Props {
   side: "buy" | "sell";
@@ -18,7 +20,6 @@ export default function ManualOrderDialog({
   onSuccess,
   onError,
 }: Props) {
-  const [orderType, setOrderType] = useState<"limit">("limit");
   const [amount, setAmount] = useState("");
   const [price, setPrice] = useState(currentPrice.toString());
   const [submitting, setSubmitting] = useState(false);
@@ -34,8 +35,7 @@ export default function ManualOrderDialog({
     if (numAmount <= 0 || numPrice <= 0) return;
     setSubmitting(true);
     try {
-      const volume =
-        side === "buy" ? numAmount / numPrice : numAmount;
+      const volume = side === "buy" ? numAmount / numPrice : numAmount;
       const fn = side === "buy" ? manualBuy : manualSell;
       await fn(market, volume, numPrice);
       onSuccess(
@@ -50,93 +50,75 @@ export default function ManualOrderDialog({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-      <div className="bg-gray-900 rounded-lg p-6 w-96 border border-gray-700">
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50">
+      <div
+        className="bg-[#0c0c0f] rounded-2xl p-6 w-96 border border-[#1e1e26] animate-fade-in"
+        style={{ boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03), 0 25px 50px -12px rgba(0,0,0,0.5)" }}
+      >
         <h2
-          className={`text-lg font-bold mb-4 ${
-            side === "buy" ? "text-green-400" : "text-red-400"
+          className={`text-lg font-bold mb-5 ${
+            side === "buy" ? "text-emerald-400" : "text-rose-400"
           }`}
         >
           Manual {side === "buy" ? "Buy" : "Sell"}
         </h2>
 
         {/* Order type */}
-        <div className="mb-3">
-          <label className="block text-sm text-gray-400 mb-1">Order Type</label>
-          <div className="flex gap-2">
-            <button
-              className={`flex-1 py-1 rounded text-sm ${
-                orderType === "limit"
-                  ? "bg-violet-600 text-white"
-                  : "bg-gray-800 text-gray-400"
-              }`}
-              onClick={() => setOrderType("limit")}
-            >
+        <div className="mb-4">
+          <label className="block text-xs font-medium text-zinc-500 mb-1.5">Order Type</label>
+          <div className="flex bg-[#141419] border border-[#1e1e26] rounded-lg p-0.5">
+            <button className="flex-1 py-1.5 rounded-md text-xs font-semibold bg-amber-500 text-black">
               Limit
             </button>
           </div>
         </div>
 
-        {/* Amount */}
-        <div className="mb-3">
-          <label className="block text-sm text-gray-400 mb-1">
-            {side === "buy" ? "Amount (KRW)" : "Volume (Coin)"}
-          </label>
-          <input
+        <div className="space-y-3 mb-4">
+          <Input
+            label={side === "buy" ? "Amount (KRW)" : "Volume (Coin)"}
             type="number"
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
-            className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white"
             placeholder={side === "buy" ? "e.g. 100000" : "e.g. 0.001"}
           />
-        </div>
-
-        {/* Price */}
-        <div className="mb-3">
-          <label className="block text-sm text-gray-400 mb-1">Price (KRW)</label>
-          <input
+          <Input
+            label="Price (KRW)"
             type="number"
             value={price}
             onChange={(e) => setPrice(e.target.value)}
-            className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white"
           />
         </div>
 
         {/* Fee preview */}
-        <div className="bg-gray-800 rounded p-3 mb-4 text-sm space-y-1">
-          <div className="flex justify-between text-gray-400">
-            <span>Total</span>
-            <span className="text-white font-mono">{total.toLocaleString()} KRW</span>
+        <div className="bg-[#141419] border border-[#1e1e26] rounded-xl p-3 mb-5 text-sm space-y-1.5">
+          <div className="flex justify-between">
+            <span className="text-zinc-500 text-xs">Total</span>
+            <span className="text-zinc-200 font-data text-xs">{total.toLocaleString()} KRW</span>
           </div>
-          <div className="flex justify-between text-gray-400">
-            <span>Fee (0.05%)</span>
-            <span className="text-white font-mono">{fee.toFixed(0)} KRW</span>
+          <div className="flex justify-between">
+            <span className="text-zinc-500 text-xs">Fee (0.05%)</span>
+            <span className="text-zinc-200 font-data text-xs">{fee.toFixed(0)} KRW</span>
           </div>
         </div>
 
         {/* Buttons */}
         <div className="flex gap-3">
-          <button
-            onClick={onClose}
-            className="flex-1 py-2 bg-gray-800 text-gray-300 rounded hover:bg-gray-700 transition-colors"
-          >
+          <Button onClick={onClose} variant="secondary" className="flex-1" size="lg">
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button
             onClick={handleSubmit}
             disabled={submitting || numAmount <= 0 || numPrice <= 0}
-            className={`flex-1 py-2 rounded font-medium transition-colors disabled:bg-gray-700 disabled:text-gray-500 ${
-              side === "buy"
-                ? "bg-green-600 hover:bg-green-700 text-white"
-                : "bg-red-600 hover:bg-red-700 text-white"
-            }`}
+            variant={side === "buy" ? "success" : "danger"}
+            className="flex-1"
+            size="lg"
           >
             {submitting
               ? "Submitting..."
               : side === "buy"
               ? "Confirm Buy"
               : "Confirm Sell"}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

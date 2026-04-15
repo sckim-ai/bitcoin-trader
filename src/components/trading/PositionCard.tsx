@@ -1,4 +1,5 @@
 import type { PositionInfo } from "../../types";
+import { Card, CardContent, CardHeader } from "../ui/Card";
 
 interface Props {
   position: PositionInfo | null;
@@ -13,14 +14,17 @@ export default function PositionCard({ position, currentPrice }: Props) {
       : 0;
 
   return (
-    <div className="bg-gray-900 rounded-lg p-4">
-      <h3 className="text-sm text-gray-400 mb-3">Position</h3>
-      <div className="space-y-2">
-        <div className="flex justify-between">
-          <span className="text-gray-400">Status</span>
+    <Card>
+      <CardHeader className="flex items-center gap-2">
+        <div className={`w-2 h-2 rounded-full ${isHolding ? "bg-emerald-400 shadow-lg shadow-emerald-500/30" : "bg-zinc-600"}`} />
+        <h3 className="text-sm font-semibold text-zinc-300">Position</h3>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex justify-between items-center">
+          <span className="text-xs text-zinc-500">Status</span>
           <span
-            className={`font-medium ${
-              isHolding ? "text-yellow-400" : "text-gray-500"
+            className={`text-sm font-semibold ${
+              isHolding ? "text-amber-400" : "text-zinc-600"
             }`}
           >
             {isHolding ? "Holding" : "Idle"}
@@ -28,23 +32,25 @@ export default function PositionCard({ position, currentPrice }: Props) {
         </div>
         {isHolding && (
           <>
-            <div className="flex justify-between">
-              <span className="text-gray-400">Buy Price</span>
-              <span className="text-white font-mono">
+            <div className="flex justify-between items-center">
+              <span className="text-xs text-zinc-500">Buy Price</span>
+              <span className="text-sm text-zinc-200 font-data">
                 {position.buy_price.toLocaleString()}
               </span>
             </div>
-            <div className="flex justify-between">
-              <span className="text-gray-400">Volume</span>
-              <span className="text-white font-mono">
+            <div className="flex justify-between items-center">
+              <span className="text-xs text-zinc-500">Volume</span>
+              <span className="text-sm text-zinc-200 font-data">
                 {position.buy_volume.toFixed(8)}
               </span>
             </div>
-            <div className="flex justify-between">
-              <span className="text-gray-400">Unrealized P/L</span>
+            <div className="flex justify-between items-center">
+              <span className="text-xs text-zinc-500">Unrealized P/L</span>
               <span
-                className={`font-bold font-mono ${
-                  pnlPct >= 0 ? "text-green-400" : "text-red-400"
+                className={`text-sm font-bold font-data px-2 py-0.5 rounded-md ${
+                  pnlPct >= 0
+                    ? "text-emerald-400 bg-emerald-500/10"
+                    : "text-rose-400 bg-rose-500/10"
                 }`}
               >
                 {pnlPct >= 0 ? "+" : ""}
@@ -53,7 +59,7 @@ export default function PositionCard({ position, currentPrice }: Props) {
             </div>
           </>
         )}
-      </div>
-    </div>
+      </CardContent>
+    </Card>
   );
 }
