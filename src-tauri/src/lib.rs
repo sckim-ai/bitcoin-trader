@@ -74,7 +74,11 @@ mod app {
     }
 
     fn dirs_db_path() -> std::path::PathBuf {
-        let mut path = std::env::current_dir().unwrap_or_default();
+        // DB를 사용자 홈 디렉토리 아래에 저장 (src-tauri/ 안에 두면 file watcher 무한루프)
+        let mut path = dirs_next::data_local_dir()
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+        path.push("bitcoin-trader");
+        std::fs::create_dir_all(&path).ok();
         path.push("bitcoin_trader.db");
         path
     }
