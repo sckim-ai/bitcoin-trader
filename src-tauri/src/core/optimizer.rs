@@ -186,8 +186,10 @@ pub fn set_parameter(params: &mut TradingParameters, name: &str, value: f64) {
         "v3_sell_max_hold_hi" => params.v3_sell_max_hold_hi = value,
         "v3_sell_max_hold_pow" => params.v3_sell_max_hold_pow = value,
         "v3_fee_rate" => params.v3_fee_rate = value,
-        "v3_min_hold_bars" => params.v3_min_hold_bars = value as i32,
-        "v3_volume_lookback" => params.v3_volume_lookback = value as i32,
+        // 정수 파라미터: truncation(`as i32`) 대신 반올림. NSGA-II는 연속 공간에서
+        // 섭동하므로 3.9 → 3(trunc)처럼 음의 편향이 생기는 걸 방지. 3.9 → 4(round).
+        "v3_min_hold_bars" => params.v3_min_hold_bars = value.round() as i32,
+        "v3_volume_lookback" => params.v3_volume_lookback = value.round() as i32,
         "v31_urgent_buy_tv_lo" => params.v31_urgent_buy_tv_lo = value,
         "v31_urgent_buy_tv_hi" => params.v31_urgent_buy_tv_hi = value,
         "v31_urgent_buy_tv_pow" => params.v31_urgent_buy_tv_pow = value,
@@ -225,12 +227,12 @@ pub fn set_parameter(params: &mut TradingParameters, name: &str, value: f64) {
         "v31_sell_max_hold_hi" => params.v31_sell_max_hold_hi = value,
         "v31_sell_max_hold_pow" => params.v31_sell_max_hold_pow = value,
         "v31_fee_rate" => params.v31_fee_rate = value,
-        "v31_min_hold_bars" => params.v31_min_hold_bars = value as i32,
-        "v31_volume_lookback" => params.v31_volume_lookback = value as i32,
+        "v31_min_hold_bars" => params.v31_min_hold_bars = value.round() as i32,
+        "v31_volume_lookback" => params.v31_volume_lookback = value.round() as i32,
         "v31_cutoff_tv_mult" => params.v31_cutoff_tv_mult = value,
         "v31_urgent_sell_tv_mult" => params.v31_urgent_sell_tv_mult = value,
         "v31_sell_ready_price_rise" => params.v31_sell_ready_price_rise = value,
-        "v31_sell_wait_max" => params.v31_sell_wait_max = value as i32,
+        "v31_sell_wait_max" => params.v31_sell_wait_max = value.round() as i32,
         _ => {}
     }
 }

@@ -5,6 +5,8 @@ pub struct ParameterRange {
     pub name: String,
     pub min: f64,
     pub max: f64,
+    /// UI hint only — HTML <input step> 화살표 증감 단위로 SimulationPage에서 사용.
+    /// NSGA-II 옵티마이저는 [min, max] 연속 공간에서 샘플링하므로 step 값을 무시한다.
     pub step: f64,
 }
 
