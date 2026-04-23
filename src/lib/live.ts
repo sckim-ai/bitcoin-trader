@@ -2,8 +2,8 @@ import type {
   Preset,
   LiveSession,
   LiveTrade,
-  CreatePresetArgs,
   CreateSessionArgs,
+  SavePresetArgs,
 } from "../types";
 
 const isTauri = "__TAURI_INTERNALS__" in window;
@@ -19,10 +19,8 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
 
 // ─── Presets ───
 export const listPresets = (): Promise<Preset[]> => invoke("list_presets");
-export const createPreset = (args: CreatePresetArgs): Promise<number> =>
-  invoke("create_preset", { args });
-export const createDefaultPreset = (name: string, strategyKey: string): Promise<number> =>
-  invoke("create_default_preset", { name, strategyKey });
+export const savePreset = (args: SavePresetArgs): Promise<number> =>
+  invoke("save_preset", { args });
 export const deletePreset = (id: number): Promise<void> =>
   invoke("delete_preset", { id });
 

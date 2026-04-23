@@ -170,7 +170,23 @@ export interface Preset {
   params_json: string;
   source: string;
   source_run_id: number | null;
+  market: string | null;
+  timeframe: string | null;
+  since_ts: string | null;
+  until_ts: string | null;
   created_at: string;
+}
+
+export interface SavePresetArgs {
+  name: string;
+  strategy_key: string;
+  market: string;
+  timeframe?: string;
+  since_ts?: string;
+  until_ts?: string;
+  partial_params: Record<string, number>;
+  source?: string;
+  source_run_id?: number;
 }
 
 export interface LiveSession {
@@ -205,14 +221,6 @@ export interface LiveTrade {
   pnl: number | null;
   pnl_pct: number | null;
   is_real: boolean;
-}
-
-export interface CreatePresetArgs {
-  name: string;
-  strategy_key: string;
-  params_json: string;
-  source?: string;
-  source_run_id?: number | null;
 }
 
 export interface CreateSessionArgs {
