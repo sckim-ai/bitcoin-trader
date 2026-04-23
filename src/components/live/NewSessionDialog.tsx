@@ -17,13 +17,22 @@ interface Props {
 
 export default function NewSessionDialog({ presets, onClose, onSubmit }: Props) {
   const [label, setLabel] = useState("");
+  const [labelTouched, setLabelTouched] = useState(false);
   const [presetId, setPresetId] = useState<number | null>(null);
   const [capital, setCapital] = useState(1_000_000);
   const [offsetDays, setOffsetDays] = useState(0);
 
+  // Default label tracks the selected preset name until the user edits it.
   useEffect(() => {
     if (presets.length > 0 && presetId == null) setPresetId(presets[0].id);
   }, [presets, presetId]);
+
+  useEffect(() => {
+    if (!labelTouched && presetId != null) {
+      const p = presets.find((x) => x.id === presetId);
+      if (p) setLabel(p.name);
+    }
+  }, [presetId, presets, labelTouched]);
 
   const canSubmit = label.trim().length > 0 && presetId != null && capital > 0;
 
@@ -33,8 +42,14 @@ export default function NewSessionDialog({ presets, onClose, onSubmit }: Props) 
         <h3 className="text-lg font-semibold text-zinc-100">New Paper Session</h3>
 
         <div>
-          <label className="text-xs text-zinc-500 block mb-1">Label</label>
-          <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="V3-OptA" />
+          <label className="text-xs text-zinc-500 block mb-1">
+            Label <span className="text-rose-400">*</span>
+          </label>
+          <Input
+            value={label}
+            onChange={(e) => { setLabel(e.target.value); setLabelTouched(true); }}
+            placeholder="세션 이름 (프리셋 이름이 기본값)"
+          />
         </div>
 
         <div>
