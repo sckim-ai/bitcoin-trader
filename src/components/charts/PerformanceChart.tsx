@@ -67,7 +67,7 @@ export default function PerformanceChart({ trades }: Props) {
   return (
     <ReactECharts
       option={option}
-      style={{ height: 300 }}
+      style={{ height: "100%", width: "100%", minHeight: 280 }}
       theme="dark"
       notMerge
     />

@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSimulationStore } from "../stores/simulationStore";
 import PerformanceChart from "../components/charts/PerformanceChart";
 import { Card, CardContent, CardHeader } from "../components/ui/Card";
@@ -7,7 +7,7 @@ import { Button } from "../components/ui/Button";
 import { Select } from "../components/ui/Select";
 import { Input } from "../components/ui/Input";
 import { NumberInput } from "../components/ui/NumberInput";
-import { Play, RotateCcw } from "lucide-react";
+import { Play, RotateCcw, ChevronDown, ChevronRight } from "lucide-react";
 import type { ParameterRange } from "../types";
 
 const MARKET_OPTIONS = [
@@ -71,6 +71,10 @@ export default function SimulationPage() {
     fetchStrategies();
   }, [fetchStrategies]);
 
+  const [simulationOpen, setSimulationOpen] = useState(true);
+  const [tradeHistoryOpen, setTradeHistoryOpen] = useState(true);
+  const [signalTimelineOpen, setSignalTimelineOpen] = useState(true);
+
   const currentStrategy = strategies.find((s) => s.key === selectedStrategy);
   const sections = useMemo(
     () => (currentStrategy ? groupBySection(currentStrategy.ranges) : {}),
@@ -79,69 +83,71 @@ export default function SimulationPage() {
 
   return (
     <div className="space-y-6 animate-fade-in">
-      {/* Controls */}
-      <div className="grid grid-cols-2 md:grid-cols-6 gap-3 items-end">
-        <div className="md:col-span-2">
+      {/* Sticky top controls: model select + run simulation */}
+      <div className="sticky top-0 z-20 bg-[#09090b] -mt-6 pt-6 pb-3 border-b border-[#1e1e26] space-y-3">
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-3 items-end">
+          <div className="md:col-span-2">
+            <Select
+              label="Strategy"
+              value={selectedStrategy}
+              onChange={(e) => {
+                void setSelectedStrategy(e.target.value);
+              }}
+              options={strategies.map((s) => ({ value: s.key, label: `${s.key} - ${s.name}` }))}
+            />
+          </div>
           <Select
-            label="Strategy"
-            value={selectedStrategy}
-            onChange={(e) => {
-              void setSelectedStrategy(e.target.value);
-            }}
-            options={strategies.map((s) => ({ value: s.key, label: `${s.key} - ${s.name}` }))}
+            label="Market"
+            value={market}
+            onChange={(e) => setMarket(e.target.value)}
+            options={MARKET_OPTIONS}
+          />
+          <Select
+            label="Timeframe"
+            value={timeframe}
+            onChange={(e) => setTimeframe(e.target.value)}
+            options={TIMEFRAME_OPTIONS}
+          />
+          <Input
+            label="Since"
+            type="date"
+            value={since}
+            onChange={(e) => setSince(e.target.value)}
+          />
+          <Input
+            label="Until"
+            type="date"
+            value={until}
+            onChange={(e) => setUntil(e.target.value)}
           />
         </div>
-        <Select
-          label="Market"
-          value={market}
-          onChange={(e) => setMarket(e.target.value)}
-          options={MARKET_OPTIONS}
-        />
-        <Select
-          label="Timeframe"
-          value={timeframe}
-          onChange={(e) => setTimeframe(e.target.value)}
-          options={TIMEFRAME_OPTIONS}
-        />
-        <Input
-          label="Since"
-          type="date"
-          value={since}
-          onChange={(e) => setSince(e.target.value)}
-        />
-        <Input
-          label="Until"
-          type="date"
-          value={until}
-          onChange={(e) => setUntil(e.target.value)}
-        />
-      </div>
 
-      <div className="flex items-center gap-3 flex-wrap">
-        <Button onClick={runSimulation} disabled={loading}>
-          {loading ? (
-            <>
-              <div className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" />
-              Running...
-            </>
-          ) : (
-            <>
-              <Play size={16} />
-              Run Simulation
-            </>
+        <div className="flex items-center gap-3 flex-wrap">
+          <Button onClick={runSimulation} disabled={loading}>
+            {loading ? (
+              <>
+                <div className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" />
+                Running...
+              </>
+            ) : (
+              <>
+                <Play size={16} />
+                Run Simulation
+              </>
+            )}
+          </Button>
+          {dataRange && dataRange.count > 0 && (
+            <span className="text-xs text-zinc-500">
+              Data: {dataRange.count.toLocaleString()} bars · {since || formatTs(dataRange.min_timestamp, true)} → {until || formatTs(dataRange.max_timestamp, true)}
+            </span>
           )}
-        </Button>
-        {dataRange && dataRange.count > 0 && (
-          <span className="text-xs text-zinc-500">
-            Data: {dataRange.count.toLocaleString()} bars · {since || formatTs(dataRange.min_timestamp, true)} → {until || formatTs(dataRange.max_timestamp, true)}
-          </span>
-        )}
-        {selectedStrategy === "V3" && market === "ETH" && timeframe === "hour" &&
-          since === "2025-01-01" && until === "2026-03-31" && (
-          <span className="inline-block px-2 py-0.5 rounded-md text-[11px] font-semibold bg-emerald-500/15 text-emerald-400">
-            Legacy V3 baseline · expected ≈ 278.64%
-          </span>
-        )}
+          {selectedStrategy === "V3" && market === "ETH" && timeframe === "hour" &&
+            since === "2025-01-01" && until === "2026-03-31" && (
+            <span className="inline-block px-2 py-0.5 rounded-md text-[11px] font-semibold bg-emerald-500/15 text-emerald-400">
+              Legacy V3 baseline · expected ≈ 278.64%
+            </span>
+          )}
+        </div>
       </div>
 
       {error && (
@@ -150,121 +156,176 @@ export default function SimulationPage() {
         </div>
       )}
 
-      {/* Parameters */}
-      {currentStrategy && currentStrategy.ranges.length > 0 && (
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-zinc-300">
-                Parameters — {currentStrategy.name}
-              </h2>
-              <Button onClick={resetParams} variant="secondary" size="sm">
-                <RotateCcw size={12} />
-                Reset
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            {Object.entries(sections).map(([section, items]) => (
-              <div key={section}>
-                <div className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500 mb-3">
-                  {section}
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {items.map((r) => (
-                    <NumberInput
-                      key={r.name}
-                      label={`${r.name}  (${r.min} ~ ${r.max})`}
-                      min={r.min}
-                      max={r.max}
-                      step={r.step}
-                      value={params[r.name] ?? r.min}
-                      onValueChange={(v) => setParam(r.name, v)}
-                    />
-                  ))}
-                </div>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
+      {/* Shared collapse toggle for Params + Results */}
+      {(currentStrategy || result) && (
+        <button
+          type="button"
+          onClick={() => setSimulationOpen((v) => !v)}
+          className="flex items-center gap-2 text-sm font-semibold text-zinc-300 hover:text-zinc-100 transition-colors select-none"
+        >
+          {simulationOpen ? (
+            <ChevronDown size={14} className="text-zinc-500" />
+          ) : (
+            <ChevronRight size={14} className="text-zinc-500" />
+          )}
+          Simulation
+          {currentStrategy && (
+            <span className="text-xs font-normal text-zinc-500">
+              — {currentStrategy.name}
+            </span>
+          )}
+        </button>
       )}
 
-      {/* Results */}
-      {result && (
-        <>
-          {/* Metric cards */}
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-            <MetricCard
-              label="Total Return"
-              value={`${result.total_return.toFixed(2)}%`}
-              color={result.total_return > 0 ? "green" : "red"}
-              trend={result.total_return > 0 ? "up" : "down"}
-            />
-            <MetricCard
-              label="Market Return"
-              value={`${result.market_return.toFixed(2)}%`}
-              color={result.market_return > 0 ? "green" : "red"}
-            />
-            <MetricCard
-              label="Win Rate"
-              value={`${result.win_rate.toFixed(1)}%`}
-              color={result.win_rate > 50 ? "green" : "red"}
-            />
-            <MetricCard
-              label="Profit Factor"
-              value={result.profit_factor.toFixed(2)}
-              color={result.profit_factor >= 1 ? "green" : "red"}
-            />
-            <MetricCard
-              label="Max Drawdown"
-              value={`${result.max_drawdown.toFixed(2)}%`}
-              color="red"
-            />
-            <MetricCard
-              label="Sharpe Ratio"
-              value={result.sharpe_ratio.toFixed(3)}
-              color={result.sharpe_ratio > 0 ? "green" : "red"}
-            />
-            <MetricCard
-              label="Sortino Ratio"
-              value={result.sortino_ratio.toFixed(3)}
-              color={result.sortino_ratio > 0 ? "green" : "red"}
-            />
-            <MetricCard
-              label="Annual Return"
-              value={`${result.annual_return.toFixed(2)}%`}
-              color={result.annual_return > 0 ? "green" : "red"}
-            />
-            <MetricCard
-              label="Trades"
-              value={String(result.total_trades)}
-              color="neutral"
-            />
-            <MetricCard
-              label="Max Consec. Losses"
-              value={String(result.max_consecutive_losses)}
-              color={result.max_consecutive_losses > 5 ? "red" : "neutral"}
-            />
-          </div>
-
-          {/* Equity curve */}
-          {result.trades.length > 0 && (
+      {/* 2-column: Params (sticky left) | Metrics + Equity (right) */}
+      {simulationOpen && (
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(340px,38%)_1fr] gap-6 items-start">
+        {/* Parameters (sticky on desktop) */}
+        {currentStrategy && currentStrategy.ranges.length > 0 && (
+          <div className="lg:sticky lg:top-[150px] min-w-0">
             <Card>
               <CardHeader>
-                <h2 className="text-sm font-semibold text-zinc-300">Equity Curve</h2>
+                <div className="flex items-center justify-between">
+                  <h2 className="text-sm font-semibold text-zinc-300">
+                    Parameters — {currentStrategy.name}
+                  </h2>
+                  <Button
+                    onClick={resetParams}
+                    variant="secondary"
+                    size="sm"
+                  >
+                    <RotateCcw size={12} />
+                    Reset
+                  </Button>
+                </div>
               </CardHeader>
-              <CardContent className="p-2">
-                <PerformanceChart trades={result.trades} />
+              <CardContent className="space-y-6 lg:max-h-[calc(100vh-220px)] lg:overflow-y-auto">
+                {Object.entries(sections).map(([section, items]) => (
+                  <div key={section}>
+                    <div className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500 mb-3">
+                      {section}
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {items.map((r) => (
+                        <NumberInput
+                          key={r.name}
+                          label={`${r.name}  (${r.min} ~ ${r.max})`}
+                          min={r.min}
+                          max={r.max}
+                          step={r.step}
+                          value={params[r.name] ?? r.min}
+                          onValueChange={(v) => setParam(r.name, v)}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ))}
               </CardContent>
             </Card>
-          )}
+          </div>
+        )}
 
-          {/* Trade table */}
+        {/* Right column: metric cards + equity curve */}
+        {result && (
+          <div className="space-y-6 min-w-0">
+            {/* Metric cards */}
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
+              <MetricCard
+                label="Total Return"
+                value={`${result.total_return.toFixed(2)}%`}
+                color={result.total_return > 0 ? "green" : "red"}
+                trend={result.total_return > 0 ? "up" : "down"}
+              />
+              <MetricCard
+                label="Market Return"
+                value={`${result.market_return.toFixed(2)}%`}
+                color={result.market_return > 0 ? "green" : "red"}
+              />
+              <MetricCard
+                label="Win Rate"
+                value={`${result.win_rate.toFixed(1)}%`}
+                color={result.win_rate > 50 ? "green" : "red"}
+              />
+              <MetricCard
+                label="Profit Factor"
+                value={result.profit_factor.toFixed(2)}
+                color={result.profit_factor >= 1 ? "green" : "red"}
+              />
+              <MetricCard
+                label="Max Drawdown"
+                value={`${result.max_drawdown.toFixed(2)}%`}
+                color="red"
+              />
+              <MetricCard
+                label="Sharpe Ratio"
+                value={result.sharpe_ratio.toFixed(3)}
+                color={result.sharpe_ratio > 0 ? "green" : "red"}
+              />
+              <MetricCard
+                label="Sortino Ratio"
+                value={result.sortino_ratio.toFixed(3)}
+                color={result.sortino_ratio > 0 ? "green" : "red"}
+              />
+              <MetricCard
+                label="Annual Return"
+                value={`${result.annual_return.toFixed(2)}%`}
+                color={result.annual_return > 0 ? "green" : "red"}
+              />
+              <MetricCard
+                label="Trades"
+                value={String(result.total_trades)}
+                color="neutral"
+              />
+              <MetricCard
+                label="Max Consec. Losses"
+                value={String(result.max_consecutive_losses)}
+                color={result.max_consecutive_losses > 5 ? "red" : "neutral"}
+              />
+            </div>
+
+            {/* Equity curve */}
+            {result.trades.length > 0 && (
+              <Card>
+                <CardHeader>
+                  <h2 className="text-sm font-semibold text-zinc-300">Equity Curve</h2>
+                </CardHeader>
+                <CardContent className="p-2 h-[400px] lg:h-[calc(100vh-540px)] lg:min-h-[360px]">
+                  <PerformanceChart trades={result.trades} />
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        )}
+      </div>
+      )}
+
+      {/* Full-width tables below the 2-column layout */}
+      {result && (
+        <>
+          {/* Trade table (collapsible) */}
           {result.trades.length > 0 && (
             <Card>
-              <CardHeader>
-                <h2 className="text-sm font-semibold text-zinc-300">Trade History</h2>
+              <CardHeader
+                className="cursor-pointer select-none hover:bg-[#141419] transition-colors"
+              >
+                <div
+                  className="flex items-center gap-2"
+                  onClick={() => setTradeHistoryOpen((v) => !v)}
+                >
+                  {tradeHistoryOpen ? (
+                    <ChevronDown size={14} className="text-zinc-500" />
+                  ) : (
+                    <ChevronRight size={14} className="text-zinc-500" />
+                  )}
+                  <h2 className="text-sm font-semibold text-zinc-300">
+                    Trade History{" "}
+                    <span className="text-xs font-normal text-zinc-500">
+                      ({result.trades.length} trades)
+                    </span>
+                  </h2>
+                </div>
               </CardHeader>
+              {tradeHistoryOpen && (
               <CardContent className="p-0">
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
@@ -309,20 +370,34 @@ export default function SimulationPage() {
                   </table>
                 </div>
               </CardContent>
+              )}
             </Card>
           )}
 
-          {/* Signal timeline */}
+          {/* Signal timeline (collapsible) */}
           {result.signal_log && result.signal_log.length > 0 && (
             <Card>
-              <CardHeader>
-                <h2 className="text-sm font-semibold text-zinc-300">
-                  Signal Timeline{" "}
-                  <span className="text-xs font-normal text-zinc-500">
-                    ({result.signal_log.length} state transitions)
-                  </span>
-                </h2>
+              <CardHeader
+                className="cursor-pointer select-none hover:bg-[#141419] transition-colors"
+              >
+                <div
+                  className="flex items-center gap-2"
+                  onClick={() => setSignalTimelineOpen((v) => !v)}
+                >
+                  {signalTimelineOpen ? (
+                    <ChevronDown size={14} className="text-zinc-500" />
+                  ) : (
+                    <ChevronRight size={14} className="text-zinc-500" />
+                  )}
+                  <h2 className="text-sm font-semibold text-zinc-300">
+                    Signal Timeline{" "}
+                    <span className="text-xs font-normal text-zinc-500">
+                      ({result.signal_log.length} state transitions)
+                    </span>
+                  </h2>
+                </div>
               </CardHeader>
+              {signalTimelineOpen && (
               <CardContent className="p-0">
                 <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
                   <table className="w-full text-sm">
@@ -353,6 +428,7 @@ export default function SimulationPage() {
                   </table>
                 </div>
               </CardContent>
+              )}
             </Card>
           )}
         </>
