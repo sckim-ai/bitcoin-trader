@@ -159,3 +159,74 @@ export interface UpdateResult {
   timeframe: string;
   new_candles: number;
 }
+
+// ─── Live Trading (Phase 1) ───
+
+export interface Preset {
+  id: number;
+  user_id: number;
+  name: string;
+  strategy_key: string;
+  params_json: string;
+  source: string;
+  source_run_id: number | null;
+  created_at: string;
+}
+
+export interface LiveSession {
+  id: number;
+  user_id: number;
+  label: string;
+  preset_id: number;
+  market: string;
+  mode: "paper" | "real";
+  status: "running" | "stopped";
+  initial_capital: number;
+  start_ts: string;
+  real_started_at: string | null;
+  last_cycle_ts: string | null;
+  last_signal: string | null;
+  current_position: "idle" | "holding";
+  current_buy_price: number | null;
+  current_buy_volume: number | null;
+  current_equity: number | null;
+  created_at: string;
+}
+
+export interface LiveTrade {
+  id: number;
+  session_id: number;
+  ts: string;
+  side: "buy" | "sell";
+  price: number;
+  volume: number;
+  fee: number;
+  signal: string;
+  pnl: number | null;
+  pnl_pct: number | null;
+  is_real: boolean;
+}
+
+export interface CreatePresetArgs {
+  name: string;
+  strategy_key: string;
+  params_json: string;
+  source?: string;
+  source_run_id?: number | null;
+}
+
+export interface CreateSessionArgs {
+  label: string;
+  preset_id: number;
+  market: string;
+  initial_capital: number;
+  start_offset_days?: number;
+}
+
+export interface SessionCycleOutput {
+  session_id: number;
+  new_completed_trades: number;
+  latest_signal: string;
+  current_position: string;
+  current_equity: number;
+}
