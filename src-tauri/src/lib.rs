@@ -16,10 +16,11 @@ pub mod commands;
 
 #[cfg(feature = "tauri-app")]
 mod app {
-    use crate::commands::{auth, data, simulation, optimization, trading, migration, notification};
+    use crate::commands::{auth, data, simulation, optimization, trading, migration, notification, live_trading};
     use crate::db::schema;
     use crate::state::AppState;
     use crate::strategies::StrategyRegistry;
+    use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
 
     pub fn run() {
@@ -65,8 +66,27 @@ mod app {
                 });
         });
 
+        // Live trading scheduler (separate DB connection).
+        let scheduler_db = Arc::new(Mutex::new(
+            schema::initialize(&db_path).expect("Failed to initialize scheduler database"),
+        ));
+        let scheduler_cancel = Arc::new(AtomicBool::new(false));
+
         tauri::Builder::default()
             .manage(app_state)
+            .setup(move |app| {
+                let app_handle = app.handle().clone();
+                let db_clone = scheduler_db.clone();
+                let cancel_clone = scheduler_cancel.clone();
+                std::thread::spawn(move || {
+                    tokio::runtime::Runtime::new()
+                        .unwrap()
+                        .block_on(async move {
+                            crate::services::live_scheduler::run_loop(app_handle, db_clone, cancel_clone).await;
+                        });
+                });
+                Ok(())
+            })
             .invoke_handler(tauri::generate_handler![
                 data::load_csv_data,
                 data::backfill_day_psy,
@@ -99,6 +119,16 @@ mod app {
                 migration::migrate_from_csv,
                 notification::save_notification_config,
                 notification::test_notification,
+                live_trading::create_preset,
+                live_trading::create_default_preset,
+                live_trading::list_presets,
+                live_trading::delete_preset,
+                live_trading::create_session,
+                live_trading::list_sessions,
+                live_trading::start_session,
+                live_trading::stop_session,
+                live_trading::delete_session,
+                live_trading::list_session_trades,
             ])
             .run(tauri::generate_context!())
             .expect("error while running tauri application");

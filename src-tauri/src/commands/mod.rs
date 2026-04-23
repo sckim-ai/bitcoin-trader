@@ -5,3 +5,4 @@ pub mod trading;
 pub mod auth;
 pub mod migration;
 pub mod notification;
+pub mod live_trading;
