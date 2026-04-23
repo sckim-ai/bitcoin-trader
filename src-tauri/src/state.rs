@@ -1,6 +1,7 @@
 use crate::core::optimizer::Individual;
 use crate::strategies::StrategyRegistry;
 use rusqlite::Connection;
+use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
@@ -29,6 +30,9 @@ pub struct AppState {
     pub registry: StrategyRegistry,
     pub auto_trading: Mutex<Option<AutoTradingHandle>>,
     pub optimization: Mutex<Option<OptimizationHandle>>,
+    /// Phase 1: 실행 중인 페이퍼 세션 id 집합. 스케줄러가 DB에서 직접
+    /// 로드하지만, UI의 즉시성을 위한 캐시.
+    pub paper_session_ids: Mutex<HashMap<i64, ()>>,
 }
 
 impl AppState {
@@ -40,6 +44,7 @@ impl AppState {
             registry: StrategyRegistry::new(),
             auto_trading: Mutex::new(None),
             optimization: Mutex::new(None),
+            paper_session_ids: Mutex::new(HashMap::new()),
         }
     }
 }

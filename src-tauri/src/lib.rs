@@ -31,6 +31,7 @@ mod app {
             registry: StrategyRegistry::new(),
             auto_trading: Mutex::new(None),
             optimization: Mutex::new(None),
+            paper_session_ids: Mutex::new(std::collections::HashMap::new()),
         };
 
         let server_state = Arc::new(AppState {
@@ -40,6 +41,7 @@ mod app {
             registry: StrategyRegistry::new(),
             auto_trading: Mutex::new(None),
             optimization: Mutex::new(None),
+            paper_session_ids: Mutex::new(std::collections::HashMap::new()),
         });
 
         let server_state_clone = server_state.clone();
