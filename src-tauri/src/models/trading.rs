@@ -67,6 +67,57 @@ pub struct TradingParameters {
     #[serde(default = "default_v5_sell_psy_day_lo")] pub v5_sell_psy_day_lo: f64,
     #[serde(default = "default_v5_sell_psy_day_hi")] pub v5_sell_psy_day_hi: f64,
     #[serde(default = "default_v5_pow")] pub v5_sell_psy_day_pow: f64,
+
+    // ─── V3.1 RegimeAdaptive (trade-value based) ───
+    // 신호 기준: vol*close (KRW 거래대금). V3의 BTC 거래량 기반에서 전환.
+    // V3의 모든 v3_* 필드와 동형이지만 스케일이 다름 (KRW 단위).
+    #[serde(default = "d_v31_ubv_lo")] pub v31_urgent_buy_tv_lo: f64,
+    #[serde(default = "d_v31_ubv_hi")] pub v31_urgent_buy_tv_hi: f64,
+    #[serde(default = "d_v31_pow")]    pub v31_urgent_buy_tv_pow: f64,
+    #[serde(default = "d_v31_bv_lo")]  pub v31_buy_tv_lo: f64,
+    #[serde(default = "d_v31_bv_hi")]  pub v31_buy_tv_hi: f64,
+    #[serde(default = "d_v31_pow")]    pub v31_buy_tv_pow: f64,
+    #[serde(default = "d_v31_bpd_lo")] pub v31_buy_price_drop_lo: f64,
+    #[serde(default = "d_v31_bpd_hi")] pub v31_buy_price_drop_hi: f64,
+    #[serde(default = "d_v31_pow")]    pub v31_buy_price_drop_pow: f64,
+    #[serde(default = "d_v31_bdc_lo")] pub v31_buy_decay_lo: f64,
+    #[serde(default = "d_v31_bdc_hi")] pub v31_buy_decay_hi: f64,
+    #[serde(default = "d_v31_pow")]    pub v31_buy_decay_pow: f64,
+    #[serde(default = "d_v31_bps_lo")] pub v31_buy_psy_lo: f64,
+    #[serde(default = "d_v31_bps_hi")] pub v31_buy_psy_hi: f64,
+    #[serde(default = "d_v31_pow")]    pub v31_buy_psy_pow: f64,
+    #[serde(default = "d_v31_bw_lo")]  pub v31_buy_wait_lo: f64,
+    #[serde(default = "d_v31_bw_hi")]  pub v31_buy_wait_hi: f64,
+    #[serde(default = "d_v31_pow")]    pub v31_buy_wait_pow: f64,
+
+    #[serde(default = "d_v31_ssl_lo")] pub v31_sell_stop_loss_lo: f64,
+    #[serde(default = "d_v31_ssl_hi")] pub v31_sell_stop_loss_hi: f64,
+    #[serde(default = "d_v31_pow")]    pub v31_sell_stop_loss_pow: f64,
+    #[serde(default = "d_v31_spf_lo")] pub v31_sell_profit_lo: f64,
+    #[serde(default = "d_v31_spf_hi")] pub v31_sell_profit_hi: f64,
+    #[serde(default = "d_v31_pow")]    pub v31_sell_profit_pow: f64,
+    #[serde(default = "d_v31_sv_lo")]  pub v31_sell_tv_lo: f64,
+    #[serde(default = "d_v31_sv_hi")]  pub v31_sell_tv_hi: f64,
+    #[serde(default = "d_v31_pow")]    pub v31_sell_tv_pow: f64,
+    #[serde(default = "d_v31_sdc_lo")] pub v31_sell_decay_lo: f64,
+    #[serde(default = "d_v31_sdc_hi")] pub v31_sell_decay_hi: f64,
+    #[serde(default = "d_v31_pow")]    pub v31_sell_decay_pow: f64,
+    #[serde(default = "d_v31_sfx_lo")] pub v31_sell_fixed_sl_lo: f64,
+    #[serde(default = "d_v31_sfx_hi")] pub v31_sell_fixed_sl_hi: f64,
+    #[serde(default = "d_v31_pow")]    pub v31_sell_fixed_sl_pow: f64,
+    #[serde(default = "d_v31_smh_lo")] pub v31_sell_max_hold_lo: f64,
+    #[serde(default = "d_v31_smh_hi")] pub v31_sell_max_hold_hi: f64,
+    #[serde(default = "d_v31_pow")]    pub v31_sell_max_hold_pow: f64,
+
+    #[serde(default = "d_v31_fee")]            pub v31_fee_rate: f64,
+    #[serde(default = "d_v31_min_hold")]       pub v31_min_hold_bars: i32,
+    #[serde(default = "d_v31_lookback")]       pub v31_volume_lookback: i32,
+
+    // 신규 파라미터화된 4개 상수 (V3에서 하드코딩이었음)
+    #[serde(default = "d_v31_cutoff_mult")]        pub v31_cutoff_tv_mult: f64,
+    #[serde(default = "d_v31_urg_sell_mult")]      pub v31_urgent_sell_tv_mult: f64,
+    #[serde(default = "d_v31_sell_ready_rise")]    pub v31_sell_ready_price_rise: f64,
+    #[serde(default = "d_v31_sell_wait_max")]      pub v31_sell_wait_max: i32,
 }
 
 fn default_v5_buy_psy_hour_lo() -> f64 { 0.05 }
@@ -78,6 +129,41 @@ fn default_v5_sell_psy_hour_hi() -> f64 { 0.15 }
 fn default_v5_sell_psy_day_lo() -> f64 { -0.10 }
 fn default_v5_sell_psy_day_hi() -> f64 { 0.20 }
 fn default_v5_pow() -> f64 { 1.0 }
+
+// V3.1 defaults — ETH/hour trade value (KRW) 스케일 기준.
+// V3 BTC volume 기본값에 대략 4_000_000 (ETH 가격) 을 곱한 수준으로 시작.
+fn d_v31_ubv_lo() -> f64 { 8.4e10 }   // 21000 BTC-vol * 4M
+fn d_v31_ubv_hi() -> f64 { 3.0e11 }   // 75000 * 4M
+fn d_v31_bv_lo()  -> f64 { 2.0e10 }
+fn d_v31_bv_hi()  -> f64 { 7.0e10 }
+fn d_v31_bpd_lo() -> f64 { 1.045 }
+fn d_v31_bpd_hi() -> f64 { 1.025 }
+fn d_v31_bdc_lo() -> f64 { 0.09 }
+fn d_v31_bdc_hi() -> f64 { 0.077 }
+fn d_v31_bps_lo() -> f64 { 0.14 }
+fn d_v31_bps_hi() -> f64 { -0.24 }
+fn d_v31_bw_lo()  -> f64 { 492.0 }
+fn d_v31_bw_hi()  -> f64 { 336.0 }
+fn d_v31_ssl_lo() -> f64 { 0.85 }
+fn d_v31_ssl_hi() -> f64 { 0.82 }
+fn d_v31_spf_lo() -> f64 { 1.145 }
+fn d_v31_spf_hi() -> f64 { 1.09 }
+fn d_v31_sv_lo()  -> f64 { 8.0e9 }
+fn d_v31_sv_hi()  -> f64 { 1.26e11 }
+fn d_v31_sdc_lo() -> f64 { 0.116 }
+fn d_v31_sdc_hi() -> f64 { 0.079 }
+fn d_v31_sfx_lo() -> f64 { 0.08 }
+fn d_v31_sfx_hi() -> f64 { 0.08 }
+fn d_v31_smh_lo() -> f64 { 672.0 }
+fn d_v31_smh_hi() -> f64 { 816.0 }
+fn d_v31_pow()    -> f64 { 2.0 }
+fn d_v31_fee()    -> f64 { 0.0005 }
+fn d_v31_min_hold() -> i32 { 21 }
+fn d_v31_lookback() -> i32 { 35 }
+fn d_v31_cutoff_mult()     -> f64 { 1.0 }
+fn d_v31_urg_sell_mult()   -> f64 { 2.0 }
+fn d_v31_sell_ready_rise() -> f64 { 1.0 }
+fn d_v31_sell_wait_max()   -> i32 { 168 }
 
 impl TradingParameters {
     /// Market-aware defaults. Volume thresholds are calibrated against ETH/hour
@@ -157,6 +243,50 @@ impl Default for TradingParameters {
             v5_sell_psy_day_lo: default_v5_sell_psy_day_lo(),
             v5_sell_psy_day_hi: default_v5_sell_psy_day_hi(),
             v5_sell_psy_day_pow: default_v5_pow(),
+
+            v31_urgent_buy_tv_lo: d_v31_ubv_lo(),
+            v31_urgent_buy_tv_hi: d_v31_ubv_hi(),
+            v31_urgent_buy_tv_pow: d_v31_pow(),
+            v31_buy_tv_lo: d_v31_bv_lo(),
+            v31_buy_tv_hi: d_v31_bv_hi(),
+            v31_buy_tv_pow: d_v31_pow(),
+            v31_buy_price_drop_lo: d_v31_bpd_lo(),
+            v31_buy_price_drop_hi: d_v31_bpd_hi(),
+            v31_buy_price_drop_pow: d_v31_pow(),
+            v31_buy_decay_lo: d_v31_bdc_lo(),
+            v31_buy_decay_hi: d_v31_bdc_hi(),
+            v31_buy_decay_pow: d_v31_pow(),
+            v31_buy_psy_lo: d_v31_bps_lo(),
+            v31_buy_psy_hi: d_v31_bps_hi(),
+            v31_buy_psy_pow: d_v31_pow(),
+            v31_buy_wait_lo: d_v31_bw_lo(),
+            v31_buy_wait_hi: d_v31_bw_hi(),
+            v31_buy_wait_pow: d_v31_pow(),
+            v31_sell_stop_loss_lo: d_v31_ssl_lo(),
+            v31_sell_stop_loss_hi: d_v31_ssl_hi(),
+            v31_sell_stop_loss_pow: d_v31_pow(),
+            v31_sell_profit_lo: d_v31_spf_lo(),
+            v31_sell_profit_hi: d_v31_spf_hi(),
+            v31_sell_profit_pow: d_v31_pow(),
+            v31_sell_tv_lo: d_v31_sv_lo(),
+            v31_sell_tv_hi: d_v31_sv_hi(),
+            v31_sell_tv_pow: d_v31_pow(),
+            v31_sell_decay_lo: d_v31_sdc_lo(),
+            v31_sell_decay_hi: d_v31_sdc_hi(),
+            v31_sell_decay_pow: d_v31_pow(),
+            v31_sell_fixed_sl_lo: d_v31_sfx_lo(),
+            v31_sell_fixed_sl_hi: d_v31_sfx_hi(),
+            v31_sell_fixed_sl_pow: d_v31_pow(),
+            v31_sell_max_hold_lo: d_v31_smh_lo(),
+            v31_sell_max_hold_hi: d_v31_smh_hi(),
+            v31_sell_max_hold_pow: d_v31_pow(),
+            v31_fee_rate: d_v31_fee(),
+            v31_min_hold_bars: d_v31_min_hold(),
+            v31_volume_lookback: d_v31_lookback(),
+            v31_cutoff_tv_mult: d_v31_cutoff_mult(),
+            v31_urgent_sell_tv_mult: d_v31_urg_sell_mult(),
+            v31_sell_ready_price_rise: d_v31_sell_ready_rise(),
+            v31_sell_wait_max: d_v31_sell_wait_max(),
         }
     }
 }
