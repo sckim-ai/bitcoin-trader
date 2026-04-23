@@ -7,8 +7,11 @@ import { Button } from "../components/ui/Button";
 import { Select } from "../components/ui/Select";
 import { Input } from "../components/ui/Input";
 import { NumberInput } from "../components/ui/NumberInput";
-import { Play, RotateCcw, ChevronDown, ChevronRight } from "lucide-react";
-import type { ParameterRange } from "../types";
+import { Play, RotateCcw, ChevronDown, ChevronRight, Save, FolderOpen } from "lucide-react";
+import type { ParameterRange, Preset } from "../types";
+import SavePresetDialog from "../components/live/SavePresetDialog";
+import LoadPresetDialog from "../components/live/LoadPresetDialog";
+import { savePreset } from "../lib/live";
 
 const MARKET_OPTIONS = [
   { value: "BTC", label: "BTC" },
@@ -65,7 +68,36 @@ export default function SimulationPage() {
     resetParams,
     fetchStrategies,
     runSimulation,
+    applyOptimizedParams,
   } = useSimulationStore();
+
+  const [showSavePreset, setShowSavePreset] = useState(false);
+  const [showLoadPreset, setShowLoadPreset] = useState(false);
+
+  const handleSavePreset = async (name: string) => {
+    await savePreset({
+      name,
+      strategy_key: selectedStrategy,
+      market,
+      timeframe,
+      since_ts: since || undefined,
+      until_ts: until || undefined,
+      partial_params: params,
+      source: "manual",
+    });
+  };
+
+  const handleLoadPreset = (preset: Preset) => {
+    const full = JSON.parse(preset.params_json) as Record<string, number>;
+    applyOptimizedParams({
+      strategy: preset.strategy_key,
+      market: preset.market ?? market,
+      timeframe: preset.timeframe ?? timeframe,
+      since: preset.since_ts ?? since,
+      until: preset.until_ts ?? until,
+      params: full,
+    });
+  };
 
   useEffect(() => {
     fetchStrategies();
@@ -81,10 +113,40 @@ export default function SimulationPage() {
     [currentStrategy]
   );
 
+  // Cumulative compound return after each trade, post-fee to match engine's bar-based Total Return.
+  // Engine subtracts fee_rate once on entry bar and once on exit bar → ~2× fee_rate drag per trade.
+  const cumReturns = useMemo(() => {
+    if (!result) return [];
+    const feeRate = params.v31_fee_rate ?? params.v3_fee_rate ?? 0;
+    const feeDrag = 2 * feeRate;
+    let acc = 1.0;
+    return result.trades.map((t) => {
+      acc *= 1 + t.pnl_pct - feeDrag;
+      return acc - 1;
+    });
+  }, [result, params]);
+
+  // If simulation ends with an open position (last_position == 1), the engine's
+  // total_return includes unrealized gains that no TradeRecord captures.  Derive
+  // the open leg's return from the engine's authoritative total_return so the
+  // synthetic row's Cum % matches exactly.
+  const openLeg = useMemo(() => {
+    if (!result || result.last_position !== 1) return null;
+    const engineFactor = 1 + result.total_return / 100;
+    const closedFactor =
+      cumReturns.length > 0 ? 1 + cumReturns[cumReturns.length - 1] : 1;
+    const unrealizedPnl = engineFactor / closedFactor - 1;
+    return {
+      buy_price: result.last_buy_price,
+      unrealized_pnl: unrealizedPnl,
+      cum_return: engineFactor - 1,
+    };
+  }, [result, cumReturns]);
+
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Sticky top controls: model select + run simulation */}
-      <div className="sticky top-0 z-20 bg-[#09090b] -mt-6 pt-6 pb-3 border-b border-[#1e1e26] space-y-3">
+      <div className="sticky -top-6 z-20 bg-[#09090b] -mt-6 pt-6 pb-3 border-b border-[#1e1e26] space-y-3">
         <div className="grid grid-cols-2 md:grid-cols-6 gap-3 items-end">
           <div className="md:col-span-2">
             <Select
@@ -136,6 +198,14 @@ export default function SimulationPage() {
               </>
             )}
           </Button>
+          <Button variant="secondary" onClick={() => setShowLoadPreset(true)}>
+            <FolderOpen size={14} />
+            Load Preset
+          </Button>
+          <Button variant="secondary" onClick={() => setShowSavePreset(true)} disabled={!selectedStrategy}>
+            <Save size={14} />
+            Save as Preset
+          </Button>
           {dataRange && dataRange.count > 0 && (
             <span className="text-xs text-zinc-500">
               Data: {dataRange.count.toLocaleString()} bars · {since || formatTs(dataRange.min_timestamp, true)} → {until || formatTs(dataRange.max_timestamp, true)}
@@ -158,23 +228,25 @@ export default function SimulationPage() {
 
       {/* Shared collapse toggle for Params + Results */}
       {(currentStrategy || result) && (
-        <button
-          type="button"
-          onClick={() => setSimulationOpen((v) => !v)}
-          className="flex items-center gap-2 text-sm font-semibold text-zinc-300 hover:text-zinc-100 transition-colors select-none"
-        >
-          {simulationOpen ? (
-            <ChevronDown size={14} className="text-zinc-500" />
-          ) : (
-            <ChevronRight size={14} className="text-zinc-500" />
-          )}
-          Simulation
-          {currentStrategy && (
-            <span className="text-xs font-normal text-zinc-500">
-              — {currentStrategy.name}
-            </span>
-          )}
-        </button>
+        <div className="pt-3">
+          <button
+            type="button"
+            onClick={() => setSimulationOpen((v) => !v)}
+            className="flex items-center gap-2 text-sm font-semibold text-zinc-300 hover:text-zinc-100 transition-colors select-none"
+          >
+            {simulationOpen ? (
+              <ChevronDown size={14} className="text-zinc-500" />
+            ) : (
+              <ChevronRight size={14} className="text-zinc-500" />
+            )}
+            Simulation
+            {currentStrategy && (
+              <span className="text-xs font-normal text-zinc-500">
+                — {currentStrategy.name}
+              </span>
+            )}
+          </button>
+        </div>
       )}
 
       {/* 2-column: Params (sticky left) | Metrics + Equity (right) */}
@@ -182,7 +254,7 @@ export default function SimulationPage() {
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(340px,38%)_1fr] gap-6 items-start">
         {/* Parameters (sticky on desktop) */}
         {currentStrategy && currentStrategy.ranges.length > 0 && (
-          <div className="lg:sticky lg:top-[150px] min-w-0">
+          <div className="lg:sticky lg:top-[126px] min-w-0">
             <Card>
               <CardHeader>
                 <div className="flex items-center justify-between">
@@ -303,7 +375,7 @@ export default function SimulationPage() {
       {result && (
         <>
           {/* Trade table (collapsible) */}
-          {result.trades.length > 0 && (
+          {(result.trades.length > 0 || openLeg) && (
             <Card>
               <CardHeader
                 className="cursor-pointer select-none hover:bg-[#141419] transition-colors"
@@ -320,7 +392,7 @@ export default function SimulationPage() {
                   <h2 className="text-sm font-semibold text-zinc-300">
                     Trade History{" "}
                     <span className="text-xs font-normal text-zinc-500">
-                      ({result.trades.length} trades)
+                      ({result.trades.length} trades{openLeg ? " + 1 open" : ""})
                     </span>
                   </h2>
                 </div>
@@ -337,6 +409,7 @@ export default function SimulationPage() {
                         <th className="text-right py-2.5 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Buy Price</th>
                         <th className="text-right py-2.5 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Sell Price</th>
                         <th className="text-right py-2.5 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">PnL %</th>
+                        <th className="text-right py-2.5 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Cum %</th>
                         <th className="text-right py-2.5 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Hold</th>
                         <th className="text-left py-2.5 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Buy Signal</th>
                         <th className="text-left py-2.5 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Sell Signal</th>
@@ -361,11 +434,48 @@ export default function SimulationPage() {
                               {(t.pnl_pct * 100).toFixed(2)}%
                             </span>
                           </td>
+                          <td className="text-right py-2.5 px-3 font-data">
+                            <span className={cumReturns[i] >= 0 ? "text-emerald-400" : "text-rose-400"}>
+                              {(cumReturns[i] * 100).toFixed(2)}%
+                            </span>
+                          </td>
                           <td className="text-right py-2.5 px-3 font-data text-zinc-400">{t.hold_bars}</td>
                           <td className="py-2.5 px-3 text-sky-400 text-xs">{t.buy_signal || "—"}</td>
                           <td className="py-2.5 px-3 text-amber-400 text-xs">{t.sell_signal || "—"}</td>
                         </tr>
                       ))}
+                      {openLeg && (
+                        <tr className="border-b border-[#1e1e26]/50 bg-amber-500/5">
+                          <td className="py-2.5 px-3 text-zinc-500">{result.trades.length + 1}</td>
+                          <td className="py-2.5 px-3 font-data text-zinc-400 text-xs whitespace-nowrap">—</td>
+                          <td className="py-2.5 px-3 text-xs whitespace-nowrap">
+                            <span className="inline-block px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 font-semibold">
+                              open
+                            </span>
+                          </td>
+                          <td className="text-right py-2.5 px-3 font-data text-zinc-300">{openLeg.buy_price.toLocaleString()}</td>
+                          <td className="text-right py-2.5 px-3 font-data text-zinc-500">—</td>
+                          <td className="text-right py-2.5 px-3">
+                            <span
+                              className={`inline-block px-2 py-0.5 rounded-md text-xs font-semibold font-data ${
+                                openLeg.unrealized_pnl >= 0
+                                  ? "bg-emerald-500/15 text-emerald-400"
+                                  : "bg-rose-500/15 text-rose-400"
+                              }`}
+                            >
+                              {(openLeg.unrealized_pnl * 100).toFixed(2)}%
+                            </span>
+                          </td>
+                          <td className="text-right py-2.5 px-3 font-data">
+                            <span className={openLeg.cum_return >= 0 ? "text-emerald-400" : "text-rose-400"}>
+                              {(openLeg.cum_return * 100).toFixed(2)}%
+                            </span>
+                          </td>
+                          <td className="text-right py-2.5 px-3 font-data text-zinc-500">—</td>
+                          <td className="py-2.5 px-3 text-zinc-500 text-xs">—</td>
+                          <td className="py-2.5 px-3 text-zinc-500 text-xs">—</td>
+                        </tr>
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -432,6 +542,26 @@ export default function SimulationPage() {
             </Card>
           )}
         </>
+      )}
+
+      {showSavePreset && (
+        <SavePresetDialog
+          strategyKey={selectedStrategy}
+          market={market}
+          timeframe={timeframe}
+          since={since}
+          until={until}
+          onClose={() => setShowSavePreset(false)}
+          onSubmit={handleSavePreset}
+        />
+      )}
+
+      {showLoadPreset && (
+        <LoadPresetDialog
+          strategyKey={selectedStrategy}
+          onClose={() => setShowLoadPreset(false)}
+          onSelect={handleLoadPreset}
+        />
       )}
     </div>
   );
