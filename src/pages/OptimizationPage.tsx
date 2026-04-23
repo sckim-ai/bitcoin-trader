@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo } from "react";
 import {
   cancelOptimization,
   deleteOptimizationRun,
-  getOptimizationRunHistory,
+  getOptimizationRunGeneration,
   getOptimizationStatus,
   listOptimizationRuns,
   listStrategies,
@@ -63,6 +63,11 @@ export default function OptimizationPage() {
     currentRunId,
     runs,
     runsLoading,
+    loadingRunId,
+    setLoadingRunId,
+    maxGeneration,
+    scrubLoading,
+    setScrubLoading,
     patchConfig,
     setSelectedObjectives,
     startRun,
@@ -70,7 +75,8 @@ export default function OptimizationPage() {
     setSelectedGen,
     setSelectedSolution,
     setError,
-    loadGenHistory,
+    loadRunLatest,
+    upsertGeneration,
     resetRun,
     setRuns,
     setRunsLoading,
@@ -136,20 +142,62 @@ export default function OptimizationPage() {
     }
   };
 
-  // Load every generation's Pareto front so the slider can scrub through
-  // the whole run's evolution, not just the final state.
-  const handleLoadRun = async (runId: number) => {
+  // Seed the viewer with just the run's latest generation (sub-second
+  // initial response even for 250k-row runs). Earlier generations are
+  // fetched on demand by the scrub effect below. Also rehydrate the config
+  // form from the run row so a follow-up "Apply → Simulation" carries
+  // that run's original context instead of the stale dropdown values.
+  const handleLoadRun = async (run: OptimizationRunSummary) => {
+    if (loadingRunId !== null) return;
+    setLoadingRunId(run.id);
     try {
-      const snapshots = await getOptimizationRunHistory(runId);
-      if (snapshots.length === 0) {
+      const view = await getOptimizationRunGeneration(run.id, null);
+      if (view.solutions.length === 0) {
         setError("No stored generations for that run.");
         return;
       }
-      loadGenHistory(runId, snapshots);
+      let c: Partial<{ market: string; timeframe: string; since: string; until: string }> = {};
+      if (run.constraints) {
+        try { c = JSON.parse(run.constraints); } catch { /* legacy row */ }
+      }
+      patchConfig({
+        selectedStrategy: run.strategy_key,
+        ...(c.market ? { market: c.market } : {}),
+        ...(c.timeframe ? { timeframe: c.timeframe } : {}),
+        ...(c.since ? { since: c.since.slice(0, 10) } : {}),
+        ...(c.until ? { until: c.until.slice(0, 10) } : {}),
+      });
+      loadRunLatest(run.id, view);
     } catch (e) {
       setError(String(e));
+    } finally {
+      setLoadingRunId(null);
     }
   };
+
+  // Lazy-fetch a generation when the slider scrubs to one that's not in the
+  // cache. Debounced so dragging through N intermediate gens doesn't fire
+  // N requests — only the settled position fetches.
+  useEffect(() => {
+    if (running) return; // live runs stream gens via event, no fetch needed
+    if (currentRunId === null || selectedGen === null) return;
+    if (genHistory.some((e) => e.generation === selectedGen)) return;
+
+    const runId = currentRunId;
+    const gen = selectedGen;
+    setScrubLoading(true);
+    const timer = setTimeout(async () => {
+      try {
+        const view = await getOptimizationRunGeneration(runId, gen);
+        upsertGeneration(runId, view);
+      } catch (e) {
+        setError(String(e));
+        setScrubLoading(false);
+      }
+    }, 180);
+
+    return () => clearTimeout(timer);
+  }, [selectedGen, currentRunId, running, genHistory, upsertGeneration, setScrubLoading, setError]);
 
   const handleDeleteRun = async (run: OptimizationRunSummary) => {
     if (run.status === "running") {
@@ -391,24 +439,38 @@ export default function OptimizationPage() {
       )}
 
       {/* Unified Generation Timeline — merges the live progress bar with the
-          retrospective gen slider. Works for active runs AND loaded past runs
-          because `loadGenHistory` fills `genHistory` with every saved gen. */}
+          retrospective gen slider. For live runs, `genHistory` streams in
+          from backend events. For loaded past runs, only the latest gen is
+          seeded; other gens are lazy-fetched when the slider visits them.
+          `maxGeneration` (loaded) vs `progress.total_generations` (running)
+          determines the scrub range. */}
       {(running || genHistory.length > 0) && (() => {
-        const firstGen = genHistory[0]?.generation ?? 1;
-        const latestGen = genHistory[genHistory.length - 1]?.generation ?? 0;
-        const targetGen = progress?.total_generations ?? Math.max(latestGen, generations);
-        const progressedPct = targetGen > firstGen
-          ? Math.round(((latestGen - firstGen) / (targetGen - firstGen)) * 100)
+        const firstGen = 1;
+        const computedLatest = genHistory.length > 0
+          ? Math.max(...genHistory.map((e) => e.generation))
+          : 0;
+        // Scrub upper bound: loaded runs use the DB's true MAX; live runs
+        // use the configured target so the bar shows full length even
+        // before completion.
+        const scrubMax = maxGeneration ?? progress?.total_generations ?? Math.max(computedLatest, generations);
+        const progressedPct = scrubMax > firstGen
+          ? Math.round(((computedLatest - firstGen) / (scrubMax - firstGen)) * 100)
           : 100;
         return (
           <Card>
             <CardHeader>
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <h2 className="text-sm font-semibold text-zinc-300">
-                  Generation Timeline — Gen {selectedGen ?? latestGen} / {targetGen}
-                  {targetGen > latestGen && running && (
+                  Generation Timeline — Gen {selectedGen ?? computedLatest} / {scrubMax}
+                  {running && scrubMax > computedLatest && (
                     <span className="text-xs font-normal text-zinc-500 ml-2">
-                      ({latestGen} computed, {progressedPct}%)
+                      ({computedLatest} computed, {progressedPct}%)
+                    </span>
+                  )}
+                  {scrubLoading && (
+                    <span className="inline-flex items-center gap-1.5 text-xs font-normal text-sky-400 ml-2">
+                      <span className="w-3 h-3 border-2 border-sky-400/30 border-t-sky-400 rounded-full animate-spin" />
+                      fetching Gen {selectedGen}…
                     </span>
                   )}
                 </h2>
@@ -427,18 +489,22 @@ export default function OptimizationPage() {
               <input
                 type="range"
                 min={firstGen}
-                max={Math.max(targetGen, firstGen + 1)}
-                value={selectedGen ?? latestGen}
-                disabled={genHistory.length < 2}
+                max={Math.max(scrubMax, firstGen + 1)}
+                value={selectedGen ?? computedLatest}
+                // For live runs, clamp to what's actually computed so the
+                // slider can't outrun the event stream. For loaded runs,
+                // the full range is scrubbable (lazy fetch fills gaps).
+                disabled={scrubMax < 2}
                 onChange={(e) => {
-                  const v = Math.min(Number(e.target.value), latestGen);
+                  const raw = Number(e.target.value);
+                  const v = running ? Math.min(raw, computedLatest) : raw;
                   setSelectedGen(v);
                 }}
                 className="w-full accent-amber-500 disabled:opacity-50"
               />
               <div className="flex justify-between text-xs text-zinc-500 mt-1">
                 <span>Gen {firstGen}</span>
-                <span>Gen {targetGen}</span>
+                <span>Gen {scrubMax}</span>
               </div>
             </CardContent>
           </Card>
@@ -576,6 +642,16 @@ export default function OptimizationPage() {
           </div>
           <Badge variant="default">{runs.length}</Badge>
         </CardHeader>
+        {loadingRunId !== null && (
+          <div className="px-4 py-2 border-t border-b border-[#1e1e26] bg-sky-500/5">
+            <div className="flex items-center gap-3 text-xs text-zinc-400">
+              <span>Loading Run #{loadingRunId} — deserializing stored generations…</span>
+            </div>
+            <div className="mt-1.5 h-1 bg-[#1e1e26] rounded overflow-hidden">
+              <div className="h-full w-1/4 bg-sky-500 rounded animate-indeterminate" />
+            </div>
+          </div>
+        )}
         <CardContent className="p-0">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -622,15 +698,23 @@ export default function OptimizationPage() {
                     <td className="py-2 px-3">
                       <div className="flex items-center gap-3">
                         <button
-                          className="text-sky-400 hover:text-sky-300 text-xs font-medium"
-                          onClick={() => handleLoadRun(r.id)}
+                          className="text-sky-400 hover:text-sky-300 disabled:opacity-40 disabled:cursor-wait text-xs font-medium inline-flex items-center gap-1.5"
+                          onClick={() => handleLoadRun(r)}
+                          disabled={loadingRunId !== null}
                         >
-                          Load
+                          {loadingRunId === r.id ? (
+                            <>
+                              <div className="w-3 h-3 border-2 border-sky-400/30 border-t-sky-400 rounded-full animate-spin" />
+                              Loading...
+                            </>
+                          ) : (
+                            "Load"
+                          )}
                         </button>
                         <button
                           className="text-rose-500/70 hover:text-rose-400 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
                           onClick={() => handleDeleteRun(r)}
-                          disabled={r.status === "running"}
+                          disabled={r.status === "running" || loadingRunId !== null}
                           title={
                             r.status === "running"
                               ? "Cannot delete a running optimization"

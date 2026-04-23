@@ -151,6 +151,7 @@ export interface OptimizationRunSummary {
   population_size: number;
   generations: number;
   objectives: string;
+  constraints: string | null;
   status: string;
   started_at: string;
   completed_at: string | null;
@@ -162,18 +163,20 @@ export async function listOptimizationRuns(limit = 50): Promise<OptimizationRunS
   throw new Error("Optimization is only available in desktop mode");
 }
 
-export async function getOptimizationRunResults(runId: number): Promise<ParetoSolution[]> {
-  if (isTauri) return tauriInvoke("get_optimization_run_results", { runId });
-  throw new Error("Optimization is only available in desktop mode");
-}
-
-export interface GenerationSnapshot {
+export interface OptimizationGenerationView {
   generation: number;
-  front: ParetoSolution[];
+  max_generation: number;
+  solutions: ParetoSolution[];
 }
 
-export async function getOptimizationRunHistory(runId: number): Promise<GenerationSnapshot[]> {
-  if (isTauri) return tauriInvoke("get_optimization_run_history", { runId });
+/// Fetch one generation of a stored run — passing `null` gets the latest
+/// (max) generation. The UI calls this once on Load, then again lazily as
+/// the slider scrubs to un-cached generations.
+export async function getOptimizationRunGeneration(
+  runId: number,
+  generation: number | null = null,
+): Promise<OptimizationGenerationView> {
+  if (isTauri) return tauriInvoke("get_optimization_run_generation", { runId, generation });
   throw new Error("Optimization is only available in desktop mode");
 }
 

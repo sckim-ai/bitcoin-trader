@@ -451,6 +451,11 @@ pub struct OptimizationRunSummary {
     pub population_size: i64,
     pub generations: i64,
     pub objectives: String,
+    /// Serialized JSON produced at insert time — contains `market`,
+    /// `timeframe`, `since`, `until`, and the min_* thresholds. The UI uses
+    /// it to re-hydrate the form when loading a past run so that
+    /// "Apply → Simulation" carries the same context the run was built with.
+    pub constraints: Option<String>,
     pub status: String,
     pub started_at: String,
     pub completed_at: Option<String>,
@@ -471,8 +476,8 @@ pub fn list_optimization_runs(
     let mut stmt = conn
         .prepare(
             "SELECT r.id, r.strategy_key, r.population_size, r.generations,
-                    r.objectives, r.status, r.started_at, r.completed_at,
-                    r.best_return
+                    r.objectives, r.constraints, r.status, r.started_at,
+                    r.completed_at, r.best_return
              FROM optimization_runs r
              ORDER BY r.id DESC
              LIMIT ?1",
@@ -486,10 +491,11 @@ pub fn list_optimization_runs(
                 population_size: row.get(2)?,
                 generations: row.get(3)?,
                 objectives: row.get(4)?,
-                status: row.get(5)?,
-                started_at: row.get(6)?,
-                completed_at: row.get(7)?,
-                best_return: row.get(8)?,
+                constraints: row.get(5)?,
+                status: row.get(6)?,
+                started_at: row.get(7)?,
+                completed_at: row.get(8)?,
+                best_return: row.get(9)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -499,120 +505,31 @@ pub fn list_optimization_runs(
     Ok(out)
 }
 
-/// Replay-friendly payload: per-generation Pareto front for a completed
-/// run, so the frontend slider can scrub through the full evolution just
-/// like the live callback timeline.
+/// A single generation's Pareto front plus the run's true maximum stored
+/// generation. The UI draws the chart from `solutions` and uses
+/// `max_generation` to drive the scrub slider's upper bound — loading only
+/// one generation at a time makes the initial "Load" response sub-second
+/// even when the run has ~250k stored solutions across 5000 generations.
 #[derive(Debug, Clone, Serialize)]
-pub struct GenerationSnapshot {
+pub struct OptimizationGenerationView {
     pub generation: i64,
-    pub front: Vec<ParetoSolution>,
+    pub max_generation: i64,
+    pub solutions: Vec<ParetoSolution>,
 }
 
-/// Fetch every stored generation's rank-0 members for a run — used to
-/// rebuild `genHistory` when a past run is loaded from the Recent Runs list.
+/// Fetch one generation's Pareto front on demand.
+/// * `generation = None` → returns the latest (MAX) generation's front. The
+///   UI calls this on Load.
+/// * `generation = Some(g)` → returns generation `g`'s front. The UI calls
+///   this as the slider scrubs to an un-cached generation.
 #[tauri::command]
-pub fn get_optimization_run_history(
+pub fn get_optimization_run_generation(
     state: State<'_, AppState>,
     run_id: i64,
-) -> Result<Vec<GenerationSnapshot>, String> {
+    generation: Option<i64>,
+) -> Result<OptimizationGenerationView, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
 
-    // Read the run's selected objectives so we can reconstruct the
-    // objectives vec in its original order (legacy rows had objectives[2..]
-    // in memory but never persisted — we only recover the first two from
-    // DB columns, but at least label them correctly).
-    let objectives_list: Vec<String> = conn
-        .query_row(
-            "SELECT objectives FROM optimization_runs WHERE id = ?1",
-            params![run_id],
-            |row| row.get::<_, String>(0),
-        )
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default();
-
-    let mut stmt = conn
-        .prepare(
-            "SELECT generation, rank, parameters, total_return, win_rate,
-                    crowding_distance, metrics_json, total_trades, max_drawdown
-             FROM optimization_results
-             WHERE run_id = ?1
-             ORDER BY generation ASC, total_return DESC",
-        )
-        .map_err(|e| e.to_string())?;
-    let rows = stmt
-        .query_map(params![run_id], |row| {
-            let gen: i64 = row.get(0)?;
-            let rank: i64 = row.get(1)?;
-            let params_json: String = row.get(2)?;
-            let total_return: f64 = row.get(3)?;
-            let win_rate: f64 = row.get(4)?;
-            let crowding: f64 = row.get(5)?;
-            let metrics_json: Option<String> = row.get(6)?;
-            let total_trades: i64 = row.get(7).unwrap_or(0);
-            let max_drawdown: f64 = row.get(8).unwrap_or(0.0);
-
-            let parameters: HashMap<String, f64> =
-                serde_json::from_str(&params_json).unwrap_or_default();
-
-            // Default metrics from DB columns (legacy rows keep NULL for
-            // metrics_json). When metrics_json exists it overwrites below.
-            let mut metrics: HashMap<String, f64> = HashMap::new();
-            metrics.insert("total_return".into(), total_return);
-            metrics.insert("win_rate".into(), win_rate);
-            metrics.insert("total_trades".into(), total_trades as f64);
-            metrics.insert("max_drawdown".into(), max_drawdown);
-            if let Some(blob) = metrics_json.as_deref() {
-                if let Ok(full) = serde_json::from_str::<HashMap<String, f64>>(blob) {
-                    for (k, v) in full {
-                        metrics.insert(k, v);
-                    }
-                }
-            }
-
-            // Reconstruct objectives vec in the order the run selected.
-            let objectives: Vec<f64> = if objectives_list.is_empty() {
-                vec![total_return, win_rate]
-            } else {
-                objectives_list
-                    .iter()
-                    .map(|name| metrics.get(name).copied().unwrap_or(0.0))
-                    .collect()
-            };
-
-            Ok((
-                gen,
-                ParetoSolution {
-                    objectives,
-                    parameters,
-                    metrics,
-                    rank: rank as usize,
-                    crowding_distance: crowding,
-                },
-            ))
-        })
-        .map_err(|e| e.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
-
-    // Group by generation preserving order.
-    let mut out: Vec<GenerationSnapshot> = Vec::new();
-    for (gen, sol) in rows {
-        if out.last().map(|s| s.generation) != Some(gen) {
-            out.push(GenerationSnapshot { generation: gen, front: Vec::new() });
-        }
-        out.last_mut().unwrap().front.push(sol);
-    }
-    Ok(out)
-}
-
-/// Fetch a single run's Pareto front (latest generation written).
-#[tauri::command]
-pub fn get_optimization_run_results(
-    state: State<'_, AppState>,
-    run_id: i64,
-) -> Result<Vec<ParetoSolution>, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
     let max_gen: Option<i64> = conn
         .query_row(
             "SELECT MAX(generation) FROM optimization_results WHERE run_id = ?1",
@@ -620,8 +537,20 @@ pub fn get_optimization_run_results(
             |row| row.get(0),
         )
         .map_err(|e| e.to_string())?;
-    let Some(max_gen) = max_gen else { return Ok(Vec::new()) };
+    let Some(max_gen) = max_gen else {
+        return Ok(OptimizationGenerationView {
+            generation: 0,
+            max_generation: 0,
+            solutions: Vec::new(),
+        });
+    };
 
+    let target_gen = generation.unwrap_or(max_gen);
+
+    // Read the run's selected objectives so we can reconstruct the
+    // objectives vec in its original order (legacy rows had objectives[2..]
+    // in memory but never persisted — we only recover the first two from
+    // DB columns, but at least label them correctly).
     let objectives_list: Vec<String> = conn
         .query_row(
             "SELECT objectives FROM optimization_runs WHERE id = ?1",
@@ -640,8 +569,8 @@ pub fn get_optimization_run_results(
              ORDER BY total_return DESC",
         )
         .map_err(|e| e.to_string())?;
-    let rows = stmt
-        .query_map(params![run_id, max_gen], |row| {
+    let solutions: Vec<ParetoSolution> = stmt
+        .query_map(params![run_id, target_gen], |row| {
             let rank: i64 = row.get(0)?;
             let params_json: String = row.get(1)?;
             let total_return: f64 = row.get(2)?;
@@ -684,7 +613,13 @@ pub fn get_optimization_run_results(
                 crowding_distance: crowding,
             })
         })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())
+
+    Ok(OptimizationGenerationView {
+        generation: target_gen,
+        max_generation: max_gen,
+        solutions,
+    })
 }

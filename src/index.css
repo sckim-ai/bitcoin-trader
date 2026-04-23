@@ -62,6 +62,16 @@ body {
 }
 .animate-fade-in { animation: fadeInUp 0.4s ease-out both; }
 
+/* Indeterminate loading bar — used for long-running fetches
+   (e.g. Recent Runs > Load with ~50k+ rows). */
+@keyframes indeterminateSlide {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+.animate-indeterminate {
+  animation: indeterminateSlide 1.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
 /* Scan line texture for cards (very subtle) */
 .texture-scanline {
   background-image: repeating-linear-gradient(
