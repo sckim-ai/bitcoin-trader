@@ -9,7 +9,16 @@ createRoot(document.getElementById('root')!).render(
   </StrictMode>,
 )
 
-// Register service worker for PWA support
-if ('serviceWorker' in navigator && !('__TAURI__' in window)) {
-  navigator.serviceWorker.register('/sw.js').catch(() => {});
+// Register service worker for PWA support — but NOT inside Tauri webview,
+// where SW navigation interception breaks route transitions.
+const isTauri = '__TAURI_INTERNALS__' in window;
+if ('serviceWorker' in navigator) {
+  if (isTauri) {
+    // Clean up any SW previously registered from a browser session.
+    navigator.serviceWorker.getRegistrations().then(regs => {
+      regs.forEach(r => r.unregister());
+    }).catch(() => {});
+  } else {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  }
 }
