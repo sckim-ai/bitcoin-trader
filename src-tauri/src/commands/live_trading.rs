@@ -89,7 +89,21 @@ pub struct CreateSessionArgs {
     pub preset_id: i64,
     pub market: String,
     pub initial_capital: f64,
-    pub start_offset_days: Option<u32>,
+}
+
+/// Normalize a preset's since_ts ("YYYY-MM-DD" or RFC3339) to an RFC3339
+/// UTC timestamp. Returns `None` if the input can't be parsed.
+fn normalize_since(raw: &str) -> Option<String> {
+    // Already RFC3339?
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(raw) {
+        return Some(dt.with_timezone(&Utc).to_rfc3339());
+    }
+    // YYYY-MM-DD?
+    if let Ok(date) = chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d") {
+        let ts = date.and_hms_opt(0, 0, 0)?.and_utc();
+        return Some(ts.to_rfc3339());
+    }
+    None
 }
 
 #[tauri::command]
@@ -99,14 +113,17 @@ pub fn create_session(
 ) -> Result<i64, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
 
-    let _preset = live_repo::get_preset(&conn, args.preset_id)
+    let preset = live_repo::get_preset(&conn, args.preset_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("preset {} not found", args.preset_id))?;
 
-    let start_ts = match args.start_offset_days {
-        Some(days) => (Utc::now() - chrono::Duration::days(days as i64)).to_rfc3339(),
-        None => Utc::now().to_rfc3339(),
-    };
+    // Session's simulation window always anchors on the preset's backtest
+    // start. Falls back to "now" if the preset has no since_ts recorded.
+    let start_ts = preset
+        .since_ts
+        .as_deref()
+        .and_then(normalize_since)
+        .unwrap_or_else(|| Utc::now().to_rfc3339());
 
     live_repo::insert_session(
         &conn,
@@ -128,11 +145,62 @@ pub fn list_sessions(state: State<'_, AppState>) -> Result<Vec<LiveSession>, Str
 }
 
 #[tauri::command]
-pub fn start_session(id: i64, state: State<'_, AppState>) -> Result<(), String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    live_repo::set_session_status(&conn, id, "running").map_err(|e| e.to_string())?;
-    drop(conn);
+pub async fn start_session(
+    id: i64,
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    use tauri::Emitter;
+
+    // Flip status + load session/preset for an immediate first cycle.
+    let (session, preset) = {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        live_repo::set_session_status(&conn, id, "running").map_err(|e| e.to_string())?;
+        let s = live_repo::get_session(&conn, id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("session {id} not found"))?;
+        let p = live_repo::get_preset(&conn, s.preset_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("preset {} not found", s.preset_id))?;
+        (s, p)
+    };
     state.paper_session_ids.lock().map_err(|e| e.to_string())?.insert(id, ());
+
+    // Kick off one cycle now so the user sees current position/signal
+    // without waiting for the next hourly boundary. The scheduler continues
+    // running on the hour for subsequent updates.
+    let handle = app_handle.clone();
+    tauri::async_runtime::spawn(async move {
+        // Dedicated DB connection — avoids contending with the main mutex
+        // while we call Upbit + run simulation.
+        let conn = match crate::db::schema::initialize(&crate::db::paths::local_db_path()) {
+            Ok(c) => std::sync::Arc::new(std::sync::Mutex::new(c)),
+            Err(e) => {
+                let _ = handle.emit("session:log", serde_json::json!({
+                    "session_id": id,
+                    "level": "ERROR",
+                    "message": format!("immediate-cycle DB init: {e}"),
+                }));
+                return;
+            }
+        };
+        let client = crate::services::live_scheduler::create_public_client();
+        let registry = crate::strategies::StrategyRegistry::new();
+
+        match crate::services::session_engine::run_session_cycle(
+            &conn, &client, &session, &preset, &registry,
+        ).await {
+            Ok(out) => { let _ = handle.emit("session:update", &out); }
+            Err(e) => {
+                let _ = handle.emit("session:log", serde_json::json!({
+                    "session_id": id,
+                    "level": "ERROR",
+                    "message": format!("immediate cycle: {e}"),
+                }));
+            }
+        }
+    });
+
     Ok(())
 }
 

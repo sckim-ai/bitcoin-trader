@@ -11,7 +11,6 @@ interface Props {
     preset_id: number;
     market: string;
     initial_capital: number;
-    start_offset_days?: number;
   }) => void;
 }
 
@@ -20,9 +19,7 @@ export default function NewSessionDialog({ presets, onClose, onSubmit }: Props) 
   const [labelTouched, setLabelTouched] = useState(false);
   const [presetId, setPresetId] = useState<number | null>(null);
   const [capital, setCapital] = useState(1_000_000);
-  const [offsetDays, setOffsetDays] = useState(0);
 
-  // Default label tracks the selected preset name until the user edits it.
   useEffect(() => {
     if (presets.length > 0 && presetId == null) setPresetId(presets[0].id);
   }, [presets, presetId]);
@@ -35,6 +32,7 @@ export default function NewSessionDialog({ presets, onClose, onSubmit }: Props) 
   }, [presetId, presets, labelTouched]);
 
   const canSubmit = label.trim().length > 0 && presetId != null && capital > 0;
+  const selectedPreset = presetId != null ? presets.find((p) => p.id === presetId) : null;
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
@@ -65,7 +63,7 @@ export default function NewSessionDialog({ presets, onClose, onSubmit }: Props) 
             className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200"
           >
             {presets.length === 0 ? (
-              <option value="">No presets available — create one first</option>
+              <option value="">No presets available — create one in Simulation page</option>
             ) : (
               presets.map((p) => (
                 <option key={p.id} value={p.id}>{p.strategy_key}: {p.name}</option>
@@ -79,18 +77,18 @@ export default function NewSessionDialog({ presets, onClose, onSubmit }: Props) 
           <Input type="number" value={capital} onChange={(e) => setCapital(Number(e.target.value))} />
         </div>
 
-        <div>
-          <label className="text-xs text-zinc-500 block mb-1">Start From</label>
-          <select
-            value={offsetDays}
-            onChange={(e) => setOffsetDays(Number(e.target.value))}
-            className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200"
-          >
-            <option value={0}>Now</option>
-            <option value={1}>1 day ago</option>
-            <option value={7}>7 days ago</option>
-            <option value={30}>30 days ago</option>
-          </select>
+        <div className="text-xs text-zinc-500 bg-zinc-800/40 rounded-lg p-3">
+          <div className="text-zinc-400 mb-1">Simulation window</div>
+          <div>
+            {selectedPreset?.since_ts && selectedPreset?.until_ts
+              ? <span className="text-zinc-200">{selectedPreset.since_ts} ~ now</span>
+              : <span className="text-zinc-500">프리셋의 시작 시점부터 현재까지 리플레이</span>
+            }
+          </div>
+          <div className="text-zinc-600 mt-1">
+            Start를 누르면 이 구간을 즉시 리플레이해 현재 포지션·시그널을 계산하고,
+            이후 매 정시에 최신 봉으로 갱신합니다.
+          </div>
         </div>
 
         <div className="flex justify-end gap-2 pt-2">
@@ -103,7 +101,6 @@ export default function NewSessionDialog({ presets, onClose, onSubmit }: Props) 
                 preset_id: presetId!,
                 market: "KRW-ETH",
                 initial_capital: capital,
-                start_offset_days: offsetDays > 0 ? offsetDays : undefined,
               });
             }}
           >

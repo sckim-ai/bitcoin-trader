@@ -14,7 +14,7 @@ pub fn seconds_until_next_hour() -> u64 {
     if remaining < 10 { remaining + 3600 } else { remaining }
 }
 
-fn create_public_client() -> UpbitClient {
+pub fn create_public_client() -> UpbitClient {
     let ak = std::env::var("UPBIT_ACCESS_KEY").unwrap_or_default();
     let sk = std::env::var("UPBIT_SECRET_KEY").unwrap_or_default();
     UpbitClient::new(ak, sk)

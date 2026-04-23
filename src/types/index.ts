@@ -228,7 +228,6 @@ export interface CreateSessionArgs {
   preset_id: number;
   market: string;
   initial_capital: number;
-  start_offset_days?: number;
 }
 
 export interface SessionCycleOutput {

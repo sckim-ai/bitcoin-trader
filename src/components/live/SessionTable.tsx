@@ -20,6 +20,7 @@ export default function SessionTable({ sessions, onStart, onStop, onDelete }: Pr
           <th className="text-left py-2">Label</th>
           <th className="text-left">Market</th>
           <th className="text-left">Status</th>
+          <th className="text-left">Position</th>
           <th className="text-right">Equity</th>
           <th className="text-right">P/L %</th>
           <th className="text-left">Signal</th>
@@ -40,6 +41,16 @@ export default function SessionTable({ sessions, onStart, onStop, onDelete }: Pr
               <td>
                 <Badge variant={s.status === "running" ? "green" : "default"}>
                   {s.status}
+                </Badge>
+              </td>
+              <td>
+                <Badge variant={s.current_position === "holding" ? "amber" : "default"}>
+                  {s.current_position}
+                  {s.current_position === "holding" && s.current_buy_price != null && (
+                    <span className="ml-1 text-[10px] text-zinc-400 font-data">
+                      @ {s.current_buy_price.toLocaleString()}
+                    </span>
+                  )}
                 </Badge>
               </td>
               <td className="text-right font-data text-zinc-200">
