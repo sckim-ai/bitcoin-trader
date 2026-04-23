@@ -1,5 +1,6 @@
 pub mod enhanced_adaptive;
 pub mod regime_adaptive;
+pub mod regime_adaptive_v31;
 
 use crate::core::signals::{PositionState, TradingSignal};
 use crate::models::config::ParameterRange;
@@ -30,6 +31,7 @@ impl StrategyRegistry {
             strategies: HashMap::new(),
         };
         registry.register("V3", Box::new(regime_adaptive::RegimeAdaptiveStrategy));
+        registry.register("V3.1", Box::new(regime_adaptive_v31::RegimeAdaptiveV31Strategy));
         registry.register("V5", Box::new(enhanced_adaptive::EnhancedAdaptiveStrategy));
         registry
     }
