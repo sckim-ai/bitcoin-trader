@@ -4,6 +4,7 @@ use rusqlite::{params, Connection, OptionalExtension, Result};
 
 // ─── Presets ───
 
+#[allow(clippy::too_many_arguments)]
 pub fn insert_preset(
     conn: &Connection,
     user_id: i64,
@@ -12,41 +13,46 @@ pub fn insert_preset(
     params_json: &str,
     source: &str,
     source_run_id: Option<i64>,
+    market: Option<&str>,
+    timeframe: Option<&str>,
+    since_ts: Option<&str>,
+    until_ts: Option<&str>,
 ) -> Result<i64> {
     let now = Utc::now().to_rfc3339();
     conn.execute(
-        "INSERT INTO presets (user_id, name, strategy_key, params_json, source, source_run_id, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![user_id, name, strategy_key, params_json, source, source_run_id, now],
+        "INSERT INTO presets
+            (user_id, name, strategy_key, params_json, source, source_run_id,
+             market, timeframe, since_ts, until_ts, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        params![user_id, name, strategy_key, params_json, source, source_run_id,
+                market, timeframe, since_ts, until_ts, now],
     )?;
     Ok(conn.last_insert_rowid())
 }
 
 pub fn get_preset(conn: &Connection, id: i64) -> Result<Option<Preset>> {
     conn.query_row(
-        "SELECT id, user_id, name, strategy_key, params_json, source, source_run_id, created_at
+        "SELECT id, user_id, name, strategy_key, params_json, source, source_run_id,
+                market, timeframe, since_ts, until_ts, created_at
          FROM presets WHERE id = ?1",
         [id],
-        |row| Ok(Preset {
-            id: row.get(0)?,
-            user_id: row.get(1)?,
-            name: row.get(2)?,
-            strategy_key: row.get(3)?,
-            params_json: row.get(4)?,
-            source: row.get(5)?,
-            source_run_id: row.get(6)?,
-            created_at: row.get(7)?,
-        }),
+        row_to_preset,
     )
     .optional()
 }
 
 pub fn list_presets(conn: &Connection, user_id: i64) -> Result<Vec<Preset>> {
     let mut stmt = conn.prepare(
-        "SELECT id, user_id, name, strategy_key, params_json, source, source_run_id, created_at
+        "SELECT id, user_id, name, strategy_key, params_json, source, source_run_id,
+                market, timeframe, since_ts, until_ts, created_at
          FROM presets WHERE user_id = ?1 ORDER BY created_at DESC",
     )?;
-    let rows = stmt.query_map([user_id], |row| Ok(Preset {
+    let rows = stmt.query_map([user_id], row_to_preset)?;
+    rows.collect()
+}
+
+fn row_to_preset(row: &rusqlite::Row) -> Result<Preset> {
+    Ok(Preset {
         id: row.get(0)?,
         user_id: row.get(1)?,
         name: row.get(2)?,
@@ -54,9 +60,12 @@ pub fn list_presets(conn: &Connection, user_id: i64) -> Result<Vec<Preset>> {
         params_json: row.get(4)?,
         source: row.get(5)?,
         source_run_id: row.get(6)?,
-        created_at: row.get(7)?,
-    }))?;
-    rows.collect()
+        market: row.get(7)?,
+        timeframe: row.get(8)?,
+        since_ts: row.get(9)?,
+        until_ts: row.get(10)?,
+        created_at: row.get(11)?,
+    })
 }
 
 pub fn delete_preset(conn: &Connection, id: i64) -> Result<usize> {
@@ -276,6 +285,8 @@ mod tests {
         conn.execute_batch(s2).unwrap();
         let s6 = include_str!("../../migrations/006_live_trading.sql");
         conn.execute_batch(s6).unwrap();
+        let s7 = include_str!("../../migrations/007_preset_context.sql");
+        conn.execute_batch(s7).unwrap();
         conn
     }
 
@@ -284,7 +295,7 @@ mod tests {
     #[test]
     fn test_preset_insert_and_get() {
         let conn = setup_db();
-        let id = insert_preset(&conn, 1, "V3-A", "V3", r#"{"foo":1}"#, "manual", None).unwrap();
+        let id = insert_preset(&conn, 1, "V3-A", "V3", r#"{"foo":1}"#, "manual", None, None, None, None, None).unwrap();
         let preset = get_preset(&conn, id).unwrap().expect("preset should exist");
         assert_eq!(preset.name, "V3-A");
         assert_eq!(preset.strategy_key, "V3");
@@ -294,9 +305,9 @@ mod tests {
     #[test]
     fn test_preset_list_ordering() {
         let conn = setup_db();
-        insert_preset(&conn, 1, "A", "V3", "{}", "manual", None).unwrap();
+        insert_preset(&conn, 1, "A", "V3", "{}", "manual", None, None, None, None, None).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(10));
-        insert_preset(&conn, 1, "B", "V3", "{}", "manual", None).unwrap();
+        insert_preset(&conn, 1, "B", "V3", "{}", "manual", None, None, None, None, None).unwrap();
         let list = list_presets(&conn, 1).unwrap();
         assert_eq!(list.len(), 2);
         assert_eq!(list[0].name, "B"); // 최신이 먼저
@@ -305,7 +316,7 @@ mod tests {
     #[test]
     fn test_preset_delete() {
         let conn = setup_db();
-        let id = insert_preset(&conn, 1, "X", "V3", "{}", "manual", None).unwrap();
+        let id = insert_preset(&conn, 1, "X", "V3", "{}", "manual", None, None, None, None, None).unwrap();
         let n = delete_preset(&conn, id).unwrap();
         assert_eq!(n, 1);
         assert!(get_preset(&conn, id).unwrap().is_none());
@@ -314,8 +325,8 @@ mod tests {
     #[test]
     fn test_preset_unique_name_per_user() {
         let conn = setup_db();
-        insert_preset(&conn, 1, "dup", "V3", "{}", "manual", None).unwrap();
-        let result = insert_preset(&conn, 1, "dup", "V3", "{}", "manual", None);
+        insert_preset(&conn, 1, "dup", "V3", "{}", "manual", None, None, None, None, None).unwrap();
+        let result = insert_preset(&conn, 1, "dup", "V3", "{}", "manual", None, None, None, None, None);
         assert!(result.is_err(), "duplicate name should fail");
     }
 
@@ -324,7 +335,7 @@ mod tests {
     #[test]
     fn test_session_insert_and_defaults() {
         let conn = setup_db();
-        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None).unwrap();
+        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None).unwrap();
         let sid = insert_session(&conn, 1, "S1", pid, "KRW-ETH", "paper", 1_000_000.0, "2026-04-24T00:00:00Z").unwrap();
         let s = get_session(&conn, sid).unwrap().expect("session exists");
         assert_eq!(s.label, "S1");
@@ -337,7 +348,7 @@ mod tests {
     #[test]
     fn test_session_status_transitions() {
         let conn = setup_db();
-        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None).unwrap();
+        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None).unwrap();
         let sid = insert_session(&conn, 1, "S1", pid, "KRW-ETH", "paper", 1_000_000.0, "2026-04-24T00:00:00Z").unwrap();
 
         assert_eq!(list_running_sessions(&conn).unwrap().len(), 0);
@@ -350,7 +361,7 @@ mod tests {
     #[test]
     fn test_session_cycle_update() {
         let conn = setup_db();
-        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None).unwrap();
+        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None).unwrap();
         let sid = insert_session(&conn, 1, "S1", pid, "KRW-ETH", "paper", 1_000_000.0, "2026-04-24T00:00:00Z").unwrap();
 
         update_session_cycle(&conn, sid, "2026-04-24T05:00:00Z", "buy", "holding",
@@ -368,7 +379,7 @@ mod tests {
     #[test]
     fn test_trade_insert_and_list() {
         let conn = setup_db();
-        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None).unwrap();
+        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None).unwrap();
         let sid = insert_session(&conn, 1, "S", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z").unwrap();
 
         insert_trade(&conn, sid, "2026-04-24T01:00:00Z", "buy", 3_000_000.0, 0.3, 450.0, "buy", None, None, false).unwrap();
@@ -384,7 +395,7 @@ mod tests {
     #[test]
     fn test_count_completed_trades() {
         let conn = setup_db();
-        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None).unwrap();
+        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None).unwrap();
         let sid = insert_session(&conn, 1, "S", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z").unwrap();
 
         assert_eq!(count_completed_trades(&conn, sid).unwrap(), 0);
@@ -397,7 +408,7 @@ mod tests {
     #[test]
     fn test_equity_upsert() {
         let conn = setup_db();
-        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None).unwrap();
+        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None).unwrap();
         let sid = insert_session(&conn, 1, "S", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z").unwrap();
 
         upsert_equity(&conn, sid, "2026-04-24T01:00:00Z", 1_000_000.0, "idle").unwrap();
@@ -413,7 +424,7 @@ mod tests {
     #[test]
     fn test_delete_session_cascades() {
         let conn = setup_db();
-        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None).unwrap();
+        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None).unwrap();
         let sid = insert_session(&conn, 1, "S", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z").unwrap();
         insert_trade(&conn, sid, "2026-04-24T01:00:00Z", "buy", 3e6, 0.3, 450.0, "buy", None, None, false).unwrap();
         upsert_equity(&conn, sid, "2026-04-24T01:00:00Z", 1e6, "idle").unwrap();

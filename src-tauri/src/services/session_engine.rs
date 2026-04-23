@@ -139,6 +139,7 @@ mod tests {
         conn.execute_batch(include_str!("../../migrations/001_initial.sql")).unwrap();
         conn.execute_batch(include_str!("../../migrations/002_users.sql")).unwrap();
         conn.execute_batch(include_str!("../../migrations/006_live_trading.sql")).unwrap();
+        conn.execute_batch(include_str!("../../migrations/007_preset_context.sql")).unwrap();
         conn
     }
 
@@ -147,7 +148,7 @@ mod tests {
     #[test]
     fn test_diff_inserts_only_new_trades() {
         let conn = setup_conn();
-        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None).unwrap();
+        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None).unwrap();
         let sid = insert_session(&conn, 1, "S", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z").unwrap();
 
         insert_trade(&conn, sid, "2026-04-24T01:00:00Z", "buy",  3e6, 0.3, 450.0, "buy",  None, None, false).unwrap();

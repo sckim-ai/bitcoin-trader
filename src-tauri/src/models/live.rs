@@ -9,6 +9,14 @@ pub struct Preset {
     pub params_json: String,
     pub source: String,
     pub source_run_id: Option<i64>,
+    /// Market where the preset was calibrated (e.g., "ETH", "BTC").
+    pub market: Option<String>,
+    /// Timeframe used when saving (e.g., "hour", "day", "week").
+    pub timeframe: Option<String>,
+    /// Backtest window start (YYYY-MM-DD).
+    pub since_ts: Option<String>,
+    /// Backtest window end (YYYY-MM-DD).
+    pub until_ts: Option<String>,
     pub created_at: String,
 }
 

@@ -11,6 +11,7 @@ fn setup_db() -> Connection {
     conn.execute_batch(include_str!("../migrations/001_initial.sql")).unwrap();
     conn.execute_batch(include_str!("../migrations/002_users.sql")).unwrap();
     conn.execute_batch(include_str!("../migrations/006_live_trading.sql")).unwrap();
+    conn.execute_batch(include_str!("../migrations/007_preset_context.sql")).unwrap();
     conn
 }
 
@@ -19,7 +20,7 @@ fn full_session_lifecycle() {
     let conn = setup_db();
 
     // 1) preset 생성
-    let pid = live_repo::insert_preset(&conn, 1, "V3-OptA", "V3", "{}", "manual", None).unwrap();
+    let pid = live_repo::insert_preset(&conn, 1, "V3-OptA", "V3", "{}", "manual", None, None, None, None, None).unwrap();
 
     // 2) 세션 3개 생성
     let s1 = live_repo::insert_session(&conn, 1, "S1", pid, "KRW-ETH", "paper", 1_000_000.0, "2026-04-24T00:00:00Z").unwrap();
@@ -66,7 +67,7 @@ fn diff_insert_idempotency() {
     // 동일한 trade 시퀀스를 재삽입하려 할 때, count_completed_trades를 활용해
     // "이미 처리된 것까지는 건너뛰기"를 호출자가 보장해야 한다는 계약을 확인.
     let conn = setup_db();
-    let pid = live_repo::insert_preset(&conn, 1, "p", "V3", "{}", "manual", None).unwrap();
+    let pid = live_repo::insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None).unwrap();
     let sid = live_repo::insert_session(&conn, 1, "S", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z").unwrap();
 
     // 1차 사이클: trade 1쌍 완료
