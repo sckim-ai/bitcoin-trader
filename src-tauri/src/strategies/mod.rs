@@ -1,9 +1,5 @@
-pub mod volume_decay;
-pub mod enhanced_volume;
-pub mod multi_indicator;
-pub mod regime_adaptive;
-pub mod ml_strategy;
 pub mod enhanced_adaptive;
+pub mod regime_adaptive;
 
 use crate::core::signals::{PositionState, TradingSignal};
 use crate::models::config::ParameterRange;
@@ -33,11 +29,7 @@ impl StrategyRegistry {
         let mut registry = Self {
             strategies: HashMap::new(),
         };
-        registry.register("V0", Box::new(volume_decay::VolumeDecayStrategy));
-        registry.register("V1", Box::new(enhanced_volume::EnhancedVolumeStrategy));
-        registry.register("V2", Box::new(multi_indicator::MultiIndicatorStrategy));
         registry.register("V3", Box::new(regime_adaptive::RegimeAdaptiveStrategy));
-        registry.register("V4", Box::new(ml_strategy::MachineLearningStrategy));
         registry.register("V5", Box::new(enhanced_adaptive::EnhancedAdaptiveStrategy));
         registry
     }
@@ -50,13 +42,13 @@ impl StrategyRegistry {
         self.strategies.get(key).map(|s| s.as_ref())
     }
 
-    pub fn list(&self) -> Vec<(&str, &str)> {
-        let mut items: Vec<(&str, &str)> = self
+    pub fn list(&self) -> Vec<(&str, &str, Vec<ParameterRange>)> {
+        let mut items: Vec<(&str, &str, Vec<ParameterRange>)> = self
             .strategies
             .iter()
-            .map(|(k, v)| (k.as_str(), v.name()))
+            .map(|(k, v)| (k.as_str(), v.name(), v.parameter_ranges()))
             .collect();
-        items.sort_by_key(|(k, _)| k.to_string());
+        items.sort_by_key(|(k, _, _)| k.to_string());
         items
     }
 }

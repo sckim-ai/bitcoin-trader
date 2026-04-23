@@ -69,7 +69,7 @@ fn test_crowding_distance_boundary_infinity() {
 fn test_optimizer_runs_without_panic() {
     let data = make_flat_data(50);
     let registry = StrategyRegistry::new();
-    let strategy = registry.get("V0").unwrap();
+    let strategy = registry.get("V3").unwrap();
 
     let config = OptimizerConfig {
         population_size: 10,
@@ -88,7 +88,7 @@ fn test_optimizer_runs_without_panic() {
 fn test_optimizer_with_callback() {
     let data = make_flat_data(50);
     let registry = StrategyRegistry::new();
-    let strategy = registry.get("V0").unwrap();
+    let strategy = registry.get("V3").unwrap();
 
     let config = OptimizerConfig {
         population_size: 10,
@@ -125,6 +125,7 @@ impl IndividualTestHelper for Individual {
             dominated_solutions: Vec::new(),
             constraint_violation: 0.0,
             parameters: TradingParameters::default(),
+            metrics: std::collections::HashMap::new(),
         }
     }
 }

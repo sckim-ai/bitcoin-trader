@@ -8,7 +8,13 @@ import {
   Users,
   LogOut,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { onOptimizationEvent } from "./lib/api";
+import {
+  useOptimizationStore,
+  type CompletionEvent,
+  type GenerationEvent,
+} from "./stores/optimizationStore";
 import DataLoadPage from "./pages/DataLoadPage";
 import SimulationPage from "./pages/SimulationPage";
 import OptimizationPage from "./pages/OptimizationPage";
@@ -104,8 +110,37 @@ function LoginForm() {
   );
 }
 
+// Global optimizer event listener — lives as long as the logged-in app,
+// so tab switches don't miss `opt:gen` / `opt:done` events. Store handlers
+// append to genHistory / clear `running`, ensuring state survives unmounts.
+function useOptimizationEventBridge() {
+  const onGen = useOptimizationStore((s) => s.onGenerationEvent);
+  const onDone = useOptimizationStore((s) => s.onCompletionEvent);
+  useEffect(() => {
+    let alive = true;
+    let unlistenGen: (() => void) | null = null;
+    let unlistenDone: (() => void) | null = null;
+    (async () => {
+      const un1 = await onOptimizationEvent<GenerationEvent>("opt:gen", (ev) => {
+        if (alive) onGen(ev);
+      });
+      const un2 = await onOptimizationEvent<CompletionEvent>("opt:done", (ev) => {
+        if (alive) onDone(ev);
+      });
+      unlistenGen = un1;
+      unlistenDone = un2;
+    })();
+    return () => {
+      alive = false;
+      unlistenGen?.();
+      unlistenDone?.();
+    };
+  }, [onGen, onDone]);
+}
+
 function App() {
   const { user, logout, isAdmin } = useAuthStore();
+  useOptimizationEventBridge();
 
   if (!user) {
     return <LoginForm />;

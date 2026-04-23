@@ -3,6 +3,10 @@ use crate::models::market::MarketData;
 use crate::models::trading::{SimulationResult, TradingParameters};
 use crate::strategies::Strategy;
 use rand::Rng;
+use rayon::prelude::*;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct Individual {
@@ -13,6 +17,11 @@ pub struct Individual {
     pub dominated_solutions: Vec<usize>,
     pub constraint_violation: f64,
     pub parameters: TradingParameters,
+    /// Full snapshot of every metric the SimulationResult produced — not
+    /// just the ones selected as objectives. Lets the UI show all columns
+    /// (total_return, win_rate, max_drawdown, profit_factor, sharpe_ratio,
+    /// sortino_ratio, total_trades) even if the run only optimised two.
+    pub metrics: HashMap<String, f64>,
 }
 
 impl Individual {
@@ -25,16 +34,23 @@ impl Individual {
             dominated_solutions: Vec::new(),
             constraint_violation: 0.0,
             parameters: params,
+            metrics: HashMap::new(),
         }
     }
 }
 
+/// Per-generation snapshot emitted via callback so callers (Tauri event
+/// bus, DB writer, tests) can react at each step.
 #[derive(Debug, Clone)]
-pub struct GenerationResult {
+pub struct GenerationResult<'a> {
     pub generation: usize,
+    pub total_generations: usize,
     pub best_return: f64,
     pub best_win_rate: f64,
     pub front_size: usize,
+    /// Reference to the current Pareto front (rank 0) for realtime
+    /// rendering. Borrow is short — callback must not retain across calls.
+    pub front: &'a [Individual],
 }
 
 pub struct Nsga2Optimizer {
@@ -45,31 +61,9 @@ pub struct Nsga2Optimizer {
 
 pub fn get_parameter(params: &TradingParameters, name: &str) -> f64 {
     match name {
-        "urgent_buy_volume_threshold" => params.urgent_buy_volume_threshold,
-        "buy_ready_volume_threshold" => params.buy_ready_volume_threshold,
-        "buy_confirm_volume_decay_ratio" => params.buy_confirm_volume_decay_ratio,
-        "buy_wait_max_periods" => params.buy_wait_max_periods as f64,
-        "buy_confirm_psy_threshold" => params.buy_confirm_psy_threshold,
-        "urgent_buy_price_drop_ratio" => params.urgent_buy_price_drop_ratio,
-        "buy_ready_price_drop_ratio" => params.buy_ready_price_drop_ratio,
-        "urgent_sell_volume_threshold" => params.urgent_sell_volume_threshold,
-        "sell_ready_volume_threshold" => params.sell_ready_volume_threshold,
-        "sell_confirm_volume_decay_ratio" => params.sell_confirm_volume_decay_ratio,
-        "sell_wait_max_periods" => params.sell_wait_max_periods as f64,
-        "urgent_sell_profit_ratio" => params.urgent_sell_profit_ratio,
-        "sell_ready_price_rise_ratio" => params.sell_ready_price_rise_ratio,
-        "trailing_stop_pct" => params.trailing_stop_pct,
-        "max_hold_periods" => params.max_hold_periods as f64,
-        "fee_rate" => params.fee_rate,
-        "fixed_stop_loss_pct" => params.fixed_stop_loss_pct,
-        "fixed_take_profit_pct" => params.fixed_take_profit_pct,
-        "v1_adaptive_volume_window" => params.v1_adaptive_volume_window as f64,
-        "v1_atr_trailing_multiplier" => params.v1_atr_trailing_multiplier,
-        "v2_rsi_weight" => params.v2_rsi_weight,
-        "v2_macd_weight" => params.v2_macd_weight,
-        "v2_bb_weight" => params.v2_bb_weight,
-        "v2_buy_score_threshold" => params.v2_buy_score_threshold,
-        "v2_sell_score_threshold" => params.v2_sell_score_threshold,
+        "v3_urgent_buy_volume_lo" => params.v3_urgent_buy_volume_lo,
+        "v3_urgent_buy_volume_hi" => params.v3_urgent_buy_volume_hi,
+        "v3_urgent_buy_volume_pow" => params.v3_urgent_buy_volume_pow,
         "v3_buy_volume_lo" => params.v3_buy_volume_lo,
         "v3_buy_volume_hi" => params.v3_buy_volume_hi,
         "v3_buy_volume_pow" => params.v3_buy_volume_pow,
@@ -112,31 +106,9 @@ pub fn get_parameter(params: &TradingParameters, name: &str) -> f64 {
 
 pub fn set_parameter(params: &mut TradingParameters, name: &str, value: f64) {
     match name {
-        "urgent_buy_volume_threshold" => params.urgent_buy_volume_threshold = value,
-        "buy_ready_volume_threshold" => params.buy_ready_volume_threshold = value,
-        "buy_confirm_volume_decay_ratio" => params.buy_confirm_volume_decay_ratio = value,
-        "buy_wait_max_periods" => params.buy_wait_max_periods = value as i32,
-        "buy_confirm_psy_threshold" => params.buy_confirm_psy_threshold = value,
-        "urgent_buy_price_drop_ratio" => params.urgent_buy_price_drop_ratio = value,
-        "buy_ready_price_drop_ratio" => params.buy_ready_price_drop_ratio = value,
-        "urgent_sell_volume_threshold" => params.urgent_sell_volume_threshold = value,
-        "sell_ready_volume_threshold" => params.sell_ready_volume_threshold = value,
-        "sell_confirm_volume_decay_ratio" => params.sell_confirm_volume_decay_ratio = value,
-        "sell_wait_max_periods" => params.sell_wait_max_periods = value as i32,
-        "urgent_sell_profit_ratio" => params.urgent_sell_profit_ratio = value,
-        "sell_ready_price_rise_ratio" => params.sell_ready_price_rise_ratio = value,
-        "trailing_stop_pct" => params.trailing_stop_pct = value,
-        "max_hold_periods" => params.max_hold_periods = value as i32,
-        "fee_rate" => params.fee_rate = value,
-        "fixed_stop_loss_pct" => params.fixed_stop_loss_pct = value,
-        "fixed_take_profit_pct" => params.fixed_take_profit_pct = value,
-        "v1_adaptive_volume_window" => params.v1_adaptive_volume_window = value as i32,
-        "v1_atr_trailing_multiplier" => params.v1_atr_trailing_multiplier = value,
-        "v2_rsi_weight" => params.v2_rsi_weight = value,
-        "v2_macd_weight" => params.v2_macd_weight = value,
-        "v2_bb_weight" => params.v2_bb_weight = value,
-        "v2_buy_score_threshold" => params.v2_buy_score_threshold = value,
-        "v2_sell_score_threshold" => params.v2_sell_score_threshold = value,
+        "v3_urgent_buy_volume_lo" => params.v3_urgent_buy_volume_lo = value,
+        "v3_urgent_buy_volume_hi" => params.v3_urgent_buy_volume_hi = value,
+        "v3_urgent_buy_volume_pow" => params.v3_urgent_buy_volume_pow = value,
         "v3_buy_volume_lo" => params.v3_buy_volume_lo = value,
         "v3_buy_volume_hi" => params.v3_buy_volume_hi = value,
         "v3_buy_volume_pow" => params.v3_buy_volume_pow = value,
@@ -179,8 +151,9 @@ pub fn set_parameter(params: &mut TradingParameters, name: &str, value: f64) {
 
 // ─── NSGA-II core functions ───
 
-/// Returns 1 if a dominates b, -1 if b dominates a, 0 if neither.
-/// All objectives are maximized.
+/// Objective-only dominance (all maximized). Returns 1 if a dominates b,
+/// -1 if b dominates a, 0 if neither. Used internally by the constrained
+/// variant below.
 pub fn dominates(a: &[f64], b: &[f64]) -> i32 {
     let mut a_better = false;
     let mut b_better = false;
@@ -200,7 +173,37 @@ pub fn dominates(a: &[f64], b: &[f64]) -> i32 {
     }
 }
 
-/// Fast non-dominated sort. Returns Vec of fronts, each front is Vec of indices.
+/// Deb's constrained-dominance:
+///   * feasible ( violation == 0 ) always dominates infeasible
+///   * among two infeasible, the lower violation dominates
+///   * among two feasible, fall back to objective-only dominance
+///
+/// This is the fix for the NSGA-II symptom where constraints accumulated
+/// via `config.min_trades` / `min_win_rate` were silently ignored —
+/// infeasible solutions (e.g. 5-trade 100%-winrate) used to flood the
+/// Pareto front because plain objective dominance treated them the same
+/// as feasible solutions.
+pub fn dominates_constrained(a: &Individual, b: &Individual) -> i32 {
+    let a_feasible = a.constraint_violation <= 0.0;
+    let b_feasible = b.constraint_violation <= 0.0;
+    match (a_feasible, b_feasible) {
+        (true, false) => 1,
+        (false, true) => -1,
+        (false, false) => {
+            if a.constraint_violation < b.constraint_violation {
+                1
+            } else if a.constraint_violation > b.constraint_violation {
+                -1
+            } else {
+                0
+            }
+        }
+        (true, true) => dominates(&a.objectives, &b.objectives),
+    }
+}
+
+/// Fast non-dominated sort using **constrained dominance**. Returns Vec of
+/// fronts, each front is Vec of indices.
 pub fn fast_non_dominated_sort(individuals: &[Individual]) -> Vec<Vec<usize>> {
     let n = individuals.len();
     let mut domination_count = vec![0usize; n];
@@ -210,7 +213,7 @@ pub fn fast_non_dominated_sort(individuals: &[Individual]) -> Vec<Vec<usize>> {
 
     for i in 0..n {
         for j in (i + 1)..n {
-            let d = dominates(&individuals[i].objectives, &individuals[j].objectives);
+            let d = dominates_constrained(&individuals[i], &individuals[j]);
             if d == 1 {
                 dominated_by[i].push(j);
                 domination_count[j] += 1;
@@ -341,6 +344,24 @@ fn mutate(
     }
 }
 
+/// Map objective key to a maximize-always value (invert minimization ones so
+/// NSGA-II domination can stay uniform — larger is better for every entry).
+fn objective_value(name: &str, result: &SimulationResult) -> f64 {
+    match name {
+        "total_return" => result.total_return,
+        "win_rate" => result.win_rate,
+        "profit_factor" => {
+            if result.profit_factor.is_finite() { result.profit_factor } else { 0.0 }
+        }
+        "total_trades" => result.total_trades as f64,
+        "sharpe_ratio" => result.sharpe_ratio,
+        "sortino_ratio" => result.sortino_ratio,
+        // Minimization objectives: negate so "higher = better" holds uniformly.
+        "max_drawdown" => -result.max_drawdown,
+        _ => 0.0,
+    }
+}
+
 fn evaluate(
     individual: &mut Individual,
     data: &[MarketData],
@@ -349,10 +370,34 @@ fn evaluate(
 ) {
     let result: SimulationResult = strategy.run_simulation(data, &individual.parameters);
 
-    // Objectives: total_return, win_rate (both maximized)
-    individual.objectives = vec![result.total_return, result.win_rate];
+    // Full metrics map — always populated so the UI can render every
+    // objective column regardless of which were selected for NSGA-II.
+    individual.metrics.insert("total_return".into(), result.total_return);
+    individual.metrics.insert("win_rate".into(), result.win_rate);
+    individual.metrics.insert(
+        "profit_factor".into(),
+        if result.profit_factor.is_finite() { result.profit_factor } else { 0.0 },
+    );
+    individual.metrics.insert("total_trades".into(), result.total_trades as f64);
+    individual.metrics.insert("sharpe_ratio".into(), result.sharpe_ratio);
+    individual.metrics.insert("sortino_ratio".into(), result.sortino_ratio);
+    // Stored as raw (positive) — the UI only negates inside dominance math.
+    individual.metrics.insert("max_drawdown".into(), result.max_drawdown);
 
-    // Constraint violation
+    // Objectives — respect the user-selected list; fall back to the default
+    // 2-tuple (return, win_rate) when none are configured.
+    if config.objectives.is_empty() {
+        individual.objectives = vec![result.total_return, result.win_rate];
+    } else {
+        individual.objectives = config
+            .objectives
+            .iter()
+            .map(|n| objective_value(n, &result))
+            .collect();
+    }
+
+    // Constraint violation (non-negative). Deb's constrained dominance uses
+    // this to treat feasible solutions as strictly better than infeasible.
     let mut violation = 0.0;
     if result.win_rate < config.min_win_rate {
         violation += config.min_win_rate - result.win_rate;
@@ -371,67 +416,127 @@ impl Nsga2Optimizer {
         Self { config }
     }
 
+    /// Legacy-compatible single-shot run (no cancel, no seed).
     pub fn run(
         &self,
         data: &[MarketData],
         strategy: &dyn Strategy,
         callback: Option<&dyn Fn(&GenerationResult)>,
     ) -> Vec<Individual> {
+        self.run_advanced(data, strategy, None, 0, None, callback)
+    }
+
+    /// Full-featured run:
+    ///   * `seed_population` — optional warm start (Continue); when absent
+    ///     a random population of `config.population_size` is created.
+    ///   * `start_generation` — generation index to start from (for progress
+    ///     reporting & for Continue to keep counting where the last run left off).
+    ///   * `cancel_token` — poll between generations; partial Pareto is
+    ///     returned when flipped.
+    ///   * `callback` — per-generation snapshot (UI events, DB writes).
+    ///
+    /// Evaluation of both initial and offspring populations uses rayon for
+    /// per-individual parallelism — ~4–8× speedup on modern desktop CPUs.
+    pub fn run_advanced(
+        &self,
+        data: &[MarketData],
+        strategy: &dyn Strategy,
+        seed_population: Option<Vec<Individual>>,
+        start_generation: usize,
+        cancel_token: Option<Arc<AtomicBool>>,
+        callback: Option<&dyn Fn(&GenerationResult)>,
+    ) -> Vec<Individual> {
         let ranges = strategy.parameter_ranges();
         let pop_size = self.config.population_size;
         let generations = self.config.generations;
-        let mut rng = rand::thread_rng();
+        let total_generations = start_generation + generations;
 
-        // 1. Random initial population
-        let mut population: Vec<Individual> = (0..pop_size)
-            .map(|_| {
+        let cancelled = || {
+            cancel_token
+                .as_ref()
+                .map(|t| t.load(Ordering::Relaxed))
+                .unwrap_or(false)
+        };
+
+        // 1. Initial population — seed if provided, else random + evaluate
+        let mut population: Vec<Individual> = if let Some(mut seed) = seed_population {
+            // Pad or truncate to pop_size
+            let mut rng = rand::thread_rng();
+            while seed.len() < pop_size {
                 let mut params = TradingParameters::default();
                 for range in &ranges {
                     let val = rng.gen::<f64>() * (range.max - range.min) + range.min;
                     set_parameter(&mut params, &range.name, val);
                 }
-                Individual::new(params)
-            })
-            .collect();
+                seed.push(Individual::new(params));
+            }
+            seed.truncate(pop_size);
+            // Re-evaluate seeded individuals — they may have been evaluated
+            // against a different market window and their objectives could
+            // be stale. This is cheap compared to generations×pop_size.
+            seed.par_iter_mut()
+                .for_each(|ind| evaluate(ind, data, strategy, &self.config));
+            seed
+        } else {
+            let mut rng = rand::thread_rng();
+            let mut pop: Vec<Individual> = (0..pop_size)
+                .map(|_| {
+                    let mut params = TradingParameters::default();
+                    for range in &ranges {
+                        let val = rng.gen::<f64>() * (range.max - range.min) + range.min;
+                        set_parameter(&mut params, &range.name, val);
+                    }
+                    Individual::new(params)
+                })
+                .collect();
+            pop.par_iter_mut()
+                .for_each(|ind| evaluate(ind, data, strategy, &self.config));
+            pop
+        };
 
-        // Evaluate initial population
-        for ind in &mut population {
-            evaluate(ind, data, strategy, &self.config);
-        }
-
-        for gen in 0..generations {
-            // Create offspring
-            let mut offspring: Vec<Individual> = Vec::with_capacity(pop_size);
-            while offspring.len() < pop_size {
-                let p1_idx = tournament_select(&population, &mut rng);
-                let p2_idx = tournament_select(&population, &mut rng);
-
-                let mut child_params = if rng.gen::<f64>() < self.config.crossover_rate {
-                    crossover(
-                        &population[p1_idx].parameters,
-                        &population[p2_idx].parameters,
-                        &ranges,
-                        &mut rng,
-                    )
-                } else {
-                    population[p1_idx].parameters.clone()
-                };
-
-                mutate(&mut child_params, &ranges, self.config.mutation_rate, &mut rng);
-
-                let mut child = Individual::new(child_params);
-                evaluate(&mut child, data, strategy, &self.config);
-                offspring.push(child);
+        for gen in start_generation..total_generations {
+            if cancelled() {
+                break;
             }
 
-            // Combine parent + offspring
-            let mut combined: Vec<Individual> = population.into_iter().chain(offspring).collect();
+            // Build offspring — crossover/mutation done sequentially (uses rng
+            // state) but evaluation is parallel.
+            let offspring_params: Vec<TradingParameters> = {
+                let mut rng = rand::thread_rng();
+                (0..pop_size)
+                    .map(|_| {
+                        let p1_idx = tournament_select(&population, &mut rng);
+                        let p2_idx = tournament_select(&population, &mut rng);
+                        let mut child = if rng.gen::<f64>() < self.config.crossover_rate {
+                            crossover(
+                                &population[p1_idx].parameters,
+                                &population[p2_idx].parameters,
+                                &ranges,
+                                &mut rng,
+                            )
+                        } else {
+                            population[p1_idx].parameters.clone()
+                        };
+                        mutate(&mut child, &ranges, self.config.mutation_rate, &mut rng);
+                        child
+                    })
+                    .collect()
+            };
+            let mut offspring: Vec<Individual> = offspring_params
+                .into_par_iter()
+                .map(|params| {
+                    let mut ind = Individual::new(params);
+                    evaluate(&mut ind, data, strategy, &self.config);
+                    ind
+                })
+                .collect();
 
-            // Non-dominated sort
+            // Combine, non-dominated sort, crowding distance
+            let mut combined: Vec<Individual> = population.into_iter()
+                .chain(offspring.drain(..))
+                .collect();
             let fronts = fast_non_dominated_sort(&combined);
             let num_objectives = if combined.is_empty() { 2 } else { combined[0].objectives.len() };
-
-            // Assign ranks and crowding distances
             for (rank, front) in fronts.iter().enumerate() {
                 for &idx in front {
                     combined[idx].rank = rank;
@@ -439,7 +544,7 @@ impl Nsga2Optimizer {
                 calculate_crowding_distance(&mut combined, front, num_objectives);
             }
 
-            // Select next generation
+            // Environmental selection
             let mut next_pop: Vec<Individual> = Vec::with_capacity(pop_size);
             for front in &fronts {
                 if next_pop.len() + front.len() <= pop_size {
@@ -447,7 +552,6 @@ impl Nsga2Optimizer {
                         next_pop.push(combined[idx].clone());
                     }
                 } else {
-                    // Sort remaining front by crowding distance (descending)
                     let mut sorted_front: Vec<usize> = front.clone();
                     sorted_front.sort_by(|&a, &b| {
                         combined[b]
@@ -462,29 +566,27 @@ impl Nsga2Optimizer {
                     break;
                 }
             }
-
             population = next_pop;
 
-            // Callback
+            // Per-generation callback — emit Pareto front + best metrics
             if let Some(cb) = callback {
-                let best_return = population
+                let pareto: Vec<Individual> =
+                    population.iter().filter(|i| i.rank == 0).cloned().collect();
+                let best_return = pareto
                     .iter()
-                    .map(|i| i.objectives.first().copied().unwrap_or(0.0))
+                    .map(|i| i.objectives.first().copied().unwrap_or(f64::NEG_INFINITY))
                     .fold(f64::NEG_INFINITY, f64::max);
-                let best_win_rate = population
+                let best_win_rate = pareto
                     .iter()
-                    .map(|i| i.objectives.get(1).copied().unwrap_or(0.0))
+                    .map(|i| i.objectives.get(1).copied().unwrap_or(f64::NEG_INFINITY))
                     .fold(f64::NEG_INFINITY, f64::max);
-                let front_size = fast_non_dominated_sort(&population)
-                    .first()
-                    .map(|f| f.len())
-                    .unwrap_or(0);
-
                 cb(&GenerationResult {
-                    generation: gen,
+                    generation: gen + 1,
+                    total_generations,
                     best_return,
                     best_win_rate,
-                    front_size,
+                    front_size: pareto.len(),
+                    front: &pareto,
                 });
             }
         }
@@ -518,6 +620,7 @@ mod tests {
                 dominated_solutions: Vec::new(),
                 constraint_violation: 0.0,
                 parameters: TradingParameters::default(),
+                metrics: HashMap::new(),
             },
             Individual {
                 objectives: vec![5.0, 40.0],
@@ -527,6 +630,7 @@ mod tests {
                 dominated_solutions: Vec::new(),
                 constraint_violation: 0.0,
                 parameters: TradingParameters::default(),
+                metrics: HashMap::new(),
             },
             Individual {
                 objectives: vec![8.0, 90.0],
@@ -536,6 +640,7 @@ mod tests {
                 dominated_solutions: Vec::new(),
                 constraint_violation: 0.0,
                 parameters: TradingParameters::default(),
+                metrics: HashMap::new(),
             },
         ];
 
@@ -560,6 +665,7 @@ mod tests {
                 dominated_solutions: Vec::new(),
                 constraint_violation: 0.0,
                 parameters: TradingParameters::default(),
+                metrics: HashMap::new(),
             },
             Individual {
                 objectives: vec![5.0, 5.0],
@@ -569,6 +675,7 @@ mod tests {
                 dominated_solutions: Vec::new(),
                 constraint_violation: 0.0,
                 parameters: TradingParameters::default(),
+                metrics: HashMap::new(),
             },
             Individual {
                 objectives: vec![10.0, 1.0],
@@ -578,6 +685,7 @@ mod tests {
                 dominated_solutions: Vec::new(),
                 constraint_violation: 0.0,
                 parameters: TradingParameters::default(),
+                metrics: HashMap::new(),
             },
         ];
 
@@ -595,10 +703,10 @@ mod tests {
     #[test]
     fn test_get_set_parameter_roundtrip() {
         let mut params = TradingParameters::default();
-        set_parameter(&mut params, "fee_rate", 0.123);
-        assert!((get_parameter(&params, "fee_rate") - 0.123).abs() < 1e-10);
+        set_parameter(&mut params, "v3_fee_rate", 0.123);
+        assert!((get_parameter(&params, "v3_fee_rate") - 0.123).abs() < 1e-10);
 
-        set_parameter(&mut params, "buy_wait_max_periods", 42.0);
-        assert_eq!(params.buy_wait_max_periods, 42);
+        set_parameter(&mut params, "v3_min_hold_bars", 42.0);
+        assert_eq!(params.v3_min_hold_bars, 42);
     }
 }

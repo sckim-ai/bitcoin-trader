@@ -7,6 +7,7 @@ pub mod api;
 pub mod auth;
 pub mod server;
 pub mod notifications;
+pub mod services;
 
 pub mod state;
 
@@ -28,6 +29,8 @@ mod app {
         let app_state = AppState {
             db: Mutex::new(conn),
             registry: StrategyRegistry::new(),
+            auto_trading: Mutex::new(None),
+            optimization: Mutex::new(None),
         };
 
         let server_state = Arc::new(AppState {
@@ -35,6 +38,8 @@ mod app {
                 schema::initialize(&db_path).expect("Failed to initialize server database"),
             ),
             registry: StrategyRegistry::new(),
+            auto_trading: Mutex::new(None),
+            optimization: Mutex::new(None),
         });
 
         let server_state_clone = server_state.clone();
@@ -46,20 +51,45 @@ mod app {
                 });
         });
 
+        // Periodic background market-data updater (separate DB connection)
+        let updater_db = Arc::new(Mutex::new(
+            schema::initialize(&db_path).expect("Failed to initialize updater database"),
+        ));
+        std::thread::spawn(move || {
+            tokio::runtime::Runtime::new()
+                .unwrap()
+                .block_on(async move {
+                    crate::services::market_updater::run_loop(updater_db).await;
+                });
+        });
+
         tauri::Builder::default()
             .manage(app_state)
             .invoke_handler(tauri::generate_handler![
                 data::load_csv_data,
+                data::backfill_day_psy,
                 data::get_candles,
+                data::get_data_range,
                 data::get_market_data,
                 simulation::list_strategies,
                 simulation::run_simulation,
                 optimization::start_optimization,
+                optimization::cancel_optimization,
+                optimization::get_optimization_status,
+                optimization::list_optimization_runs,
+                optimization::get_optimization_run_results,
+                optimization::get_optimization_run_history,
+                optimization::delete_optimization_run,
                 trading::get_current_price,
                 trading::get_balance,
                 trading::manual_buy,
                 trading::manual_sell,
                 trading::get_position,
+                trading::start_auto_trading,
+                trading::stop_auto_trading,
+                trading::get_auto_trading_status,
+                data::update_market_data,
+                data::auto_update_all_markets,
                 auth::login,
                 auth::register,
                 auth::logout,

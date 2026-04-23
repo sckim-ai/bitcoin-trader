@@ -10,6 +10,38 @@ pub fn initialize(db_path: &Path) -> Result<Connection> {
     conn.execute_batch(schema_v1)?;
     let schema_v2 = include_str!("../../migrations/002_users.sql");
     conn.execute_batch(schema_v2)?;
+    // 003: ALTER TABLE ADD COLUMN is not idempotent — ignore "duplicate column" error on repeat boot.
+    let schema_v3 = include_str!("../../migrations/003_day_psy.sql");
+    if let Err(e) = conn.execute_batch(schema_v3) {
+        let msg = e.to_string();
+        if !msg.contains("duplicate column") {
+            return Err(e);
+        }
+    }
+    let schema_v4 = include_str!("../../migrations/004_opt_metrics.sql");
+    if let Err(e) = conn.execute_batch(schema_v4) {
+        let msg = e.to_string();
+        if !msg.contains("duplicate column") {
+            return Err(e);
+        }
+    }
+    let schema_v5 = include_str!("../../migrations/005_opt_indexes.sql");
+    if let Err(e) = conn.execute_batch(schema_v5) {
+        let msg = e.to_string();
+        if !msg.contains("duplicate column") {
+            return Err(e);
+        }
+    }
+    // Backfill best_return cache for pre-migration runs so the listing
+    // query works uniformly. Idempotent: only touches NULL rows.
+    conn.execute(
+        "UPDATE optimization_runs
+         SET best_return = (
+            SELECT MAX(total_return) FROM optimization_results WHERE run_id = optimization_runs.id
+         )
+         WHERE best_return IS NULL",
+        [],
+    )?;
     seed_admin(&conn)?;
     Ok(conn)
 }

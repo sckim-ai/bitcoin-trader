@@ -1,6 +1,7 @@
-import { useEffect, useMemo } from "react";
+import { Fragment, useEffect, useMemo } from "react";
 import {
   cancelOptimization,
+  deleteOptimizationRun,
   getOptimizationRunHistory,
   getOptimizationStatus,
   listOptimizationRuns,
@@ -17,7 +18,7 @@ import { Input } from "../components/ui/Input";
 import { NumberInput } from "../components/ui/NumberInput";
 import { Select } from "../components/ui/Select";
 import { Badge } from "../components/ui/Badge";
-import { Download, History, Play, Rocket, Square, X } from "lucide-react";
+import { Download, History, Play, Rocket, Square, Trash2 } from "lucide-react";
 import type { ParetoSolution, StrategyInfo } from "../types";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
@@ -59,6 +60,9 @@ export default function OptimizationPage() {
     selectedGen,
     selectedSolution,
     error,
+    currentRunId,
+    runs,
+    runsLoading,
     patchConfig,
     setSelectedObjectives,
     startRun,
@@ -67,10 +71,12 @@ export default function OptimizationPage() {
     setSelectedSolution,
     setError,
     loadGenHistory,
+    resetRun,
+    setRuns,
+    setRunsLoading,
   } = useOptimizationStore();
 
   const [strategies, setStrategies] = useState<StrategyInfo[]>([]);
-  const [runs, setRuns] = useState<OptimizationRunSummary[]>([]);
 
   useEffect(() => {
     listStrategies(market).then(setStrategies).catch(() => {});
@@ -80,11 +86,16 @@ export default function OptimizationPage() {
     }).catch(() => {});
   }, [market, setRunning]);
 
+  // Cached `runs` from the store are shown immediately on tab re-entry;
+  // the background fetch then refreshes them without blocking the UI.
   const refreshRuns = async () => {
+    setRunsLoading(true);
     try {
       setRuns(await listOptimizationRuns(30));
     } catch {
       /* silent */
+    } finally {
+      setRunsLoading(false);
     }
   };
 
@@ -135,6 +146,29 @@ export default function OptimizationPage() {
         return;
       }
       loadGenHistory(runId, snapshots);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const handleDeleteRun = async (run: OptimizationRunSummary) => {
+    if (run.status === "running") {
+      setError("Cannot delete a currently-running optimization.");
+      return;
+    }
+    const ok = window.confirm(
+      `Delete Run #${run.id} (${run.strategy_key}, ${run.population_size}×${run.generations})?\n\n` +
+      `All stored generations for this run will be permanently removed.\nThis action cannot be undone.`
+    );
+    if (!ok) return;
+    try {
+      await deleteOptimizationRun(run.id);
+      // If this was the loaded run, clear the on-screen history so stale
+      // solutions don't linger after the source data has been dropped.
+      if (currentRunId === run.id) {
+        resetRun();
+      }
+      await refreshRuns();
     } catch (e) {
       setError(String(e));
     }
@@ -459,42 +493,69 @@ export default function OptimizationPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {displayedEvent.front.map((s, i) => (
-                      <tr
-                        key={i}
-                        className="border-b border-[#1e1e26]/50 hover:bg-[#141419] transition-colors cursor-pointer"
-                        onClick={() => setSelectedSolution(s)}
-                      >
-                        <td className="py-2.5 px-3 text-zinc-500">{i + 1}</td>
-                        {ALL_METRICS.map((m) => {
-                          const v = metricValue(s, m.key);
-                          return (
-                            <td
-                              key={m.key}
-                              className="text-right py-2.5 px-3 font-data text-zinc-300"
-                            >
-                              {v !== null ? v.toFixed(2) : "—"}
-                            </td>
-                          );
-                        })}
-                        <td className="text-right py-2.5 px-3 font-data text-zinc-500">
-                          {Number.isFinite(s.crowding_distance)
-                            ? s.crowding_distance.toFixed(4)
-                            : "Inf"}
-                        </td>
-                        <td className="py-2.5 px-3">
-                          <button
-                            className="text-sky-400 hover:text-sky-300 text-xs font-medium"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleApplyToSimulation(s);
-                            }}
+                    {displayedEvent.front.map((s, i) => {
+                      const expanded = selectedSolution === s;
+                      return (
+                        <Fragment key={i}>
+                          <tr
+                            className={`border-b border-[#1e1e26]/50 hover:bg-[#141419] transition-colors cursor-pointer ${
+                              expanded ? "bg-[#141419]" : ""
+                            }`}
+                            onClick={() => setSelectedSolution(expanded ? null : s)}
                           >
-                            Apply → Simulation
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                            <td className="py-2.5 px-3 text-zinc-500">{i + 1}</td>
+                            {ALL_METRICS.map((m) => {
+                              const v = metricValue(s, m.key);
+                              return (
+                                <td
+                                  key={m.key}
+                                  className="text-right py-2.5 px-3 font-data text-zinc-300"
+                                >
+                                  {v !== null ? v.toFixed(2) : "—"}
+                                </td>
+                              );
+                            })}
+                            <td className="text-right py-2.5 px-3 font-data text-zinc-500">
+                              {Number.isFinite(s.crowding_distance)
+                                ? s.crowding_distance.toFixed(4)
+                                : "Inf"}
+                            </td>
+                            <td className="py-2.5 px-3">
+                              <button
+                                className="text-sky-400 hover:text-sky-300 text-xs font-medium"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleApplyToSimulation(s);
+                                }}
+                              >
+                                Apply → Simulation
+                              </button>
+                            </td>
+                          </tr>
+                          {expanded && (
+                            <tr className="bg-[#0c0c0f] border-b border-[#1e1e26]">
+                              <td colSpan={ALL_METRICS.length + 3} className="px-5 py-4">
+                                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+                                  {Object.entries(s.parameters)
+                                    .sort(([a], [b]) => a.localeCompare(b))
+                                    .map(([key, value]) => (
+                                      <div
+                                        key={key}
+                                        className="flex justify-between bg-[#141419] border border-[#1e1e26] rounded-lg px-3 py-1.5"
+                                      >
+                                        <span className="text-zinc-500 truncate mr-2 text-xs">{key}</span>
+                                        <span className="text-zinc-200 font-data text-xs">
+                                          {typeof value === "number" ? value.toFixed(4) : String(value)}
+                                        </span>
+                                      </div>
+                                    ))}
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -503,77 +564,15 @@ export default function OptimizationPage() {
         </>
       )}
 
-      {selectedSolution && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6"
-          onClick={() => setSelectedSolution(null)}
-        >
-          <div
-            className="bg-[#0c0c0f] border border-[#1e1e26] rounded-xl shadow-2xl w-full max-w-4xl max-h-[85vh] flex flex-col"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between px-5 py-4 border-b border-[#1e1e26]">
-              <div>
-                <h3 className="text-sm font-semibold text-zinc-200">Solution Parameters</h3>
-                <div className="mt-1 flex gap-3 text-xs text-zinc-500 flex-wrap">
-                  {ALL_METRICS.map((m) => {
-                    const v = metricValue(selectedSolution, m.key);
-                    if (v === null) return null;
-                    return (
-                      <span key={m.key}>
-                        {m.label}:{" "}
-                        <span className="text-zinc-200 font-data">{v.toFixed(2)}</span>
-                      </span>
-                    );
-                  })}
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    handleApplyToSimulation(selectedSolution);
-                    setSelectedSolution(null);
-                  }}
-                >
-                  Apply → Simulation
-                </Button>
-                <button
-                  className="text-zinc-500 hover:text-zinc-200 transition-colors"
-                  onClick={() => setSelectedSolution(null)}
-                  aria-label="Close"
-                >
-                  <X size={18} />
-                </button>
-              </div>
-            </div>
-            <div className="px-5 py-4 overflow-y-auto">
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-                {Object.entries(selectedSolution.parameters)
-                  .sort(([a], [b]) => a.localeCompare(b))
-                  .map(([key, value]) => (
-                    <div
-                      key={key}
-                      className="flex justify-between bg-[#141419] border border-[#1e1e26] rounded-lg px-3 py-1.5"
-                    >
-                      <span className="text-zinc-500 truncate mr-2 text-xs">{key}</span>
-                      <span className="text-zinc-200 font-data text-xs">
-                        {typeof value === "number" ? value.toFixed(4) : String(value)}
-                      </span>
-                    </div>
-                  ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Run history */}
       <Card>
         <CardHeader className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <History size={14} className="text-zinc-500" />
             <h2 className="text-sm font-semibold text-zinc-300">Recent Runs</h2>
+            {runsLoading && (
+              <div className="w-3 h-3 border-2 border-amber-500/30 border-t-amber-500 rounded-full animate-spin" />
+            )}
           </div>
           <Badge variant="default">{runs.length}</Badge>
         </CardHeader>
@@ -621,12 +620,27 @@ export default function OptimizationPage() {
                       {r.started_at.slice(0, 16).replace("T", " ")}
                     </td>
                     <td className="py-2 px-3">
-                      <button
-                        className="text-sky-400 hover:text-sky-300 text-xs font-medium"
-                        onClick={() => handleLoadRun(r.id)}
-                      >
-                        Load
-                      </button>
+                      <div className="flex items-center gap-3">
+                        <button
+                          className="text-sky-400 hover:text-sky-300 text-xs font-medium"
+                          onClick={() => handleLoadRun(r.id)}
+                        >
+                          Load
+                        </button>
+                        <button
+                          className="text-rose-500/70 hover:text-rose-400 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                          onClick={() => handleDeleteRun(r)}
+                          disabled={r.status === "running"}
+                          title={
+                            r.status === "running"
+                              ? "Cannot delete a running optimization"
+                              : "Delete this run and all its stored generations"
+                          }
+                          aria-label="Delete run"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

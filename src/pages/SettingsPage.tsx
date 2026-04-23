@@ -21,7 +21,7 @@ import { Button } from "../components/ui/Button";
 export default function SettingsPage() {
   const [accessKey, setAccessKey] = useState("");
   const [secretKey, setSecretKey] = useState("");
-  const [defaultStrategy, setDefaultStrategy] = useState("V0");
+  const [defaultStrategy, setDefaultStrategy] = useState("V3");
   const [saved, setSaved] = useState(false);
 
   // Notification state
@@ -39,12 +39,7 @@ export default function SettingsPage() {
   const [notifStatus, setNotifStatus] = useState<Record<string, string>>({});
 
   const strategies = [
-    { key: "V0", name: "Volume Decay" },
-    { key: "V1", name: "Enhanced Volume" },
-    { key: "V2", name: "Multi Indicator" },
     { key: "V3", name: "Regime Adaptive" },
-    { key: "V4", name: "Machine Learning" },
-    { key: "V5", name: "Enhanced Adaptive" },
   ];
 
   const handleSaveKeys = () => {
@@ -214,7 +209,7 @@ export default function SettingsPage() {
           <div className="text-xs text-zinc-500 space-y-1">
             <p>Bitcoin Trader v0.1.0</p>
             <p>Upbit-based algorithmic trading system</p>
-            <p>Strategies: V0-V5 (Volume Decay, Enhanced Volume, Multi Indicator, Regime Adaptive, ML, Enhanced Adaptive)</p>
+            <p>Strategy: V3 Regime Adaptive</p>
           </div>
         </CardContent>
       </Card>

@@ -44,6 +44,24 @@ export interface TradeRecord {
   hold_bars: number;
   buy_signal: string;
   sell_signal: string;
+  buy_timestamp: string;
+  sell_timestamp: string;
+}
+
+export interface DataRange {
+  market: string;
+  timeframe: string;
+  count: number;
+  min_timestamp?: string;
+  max_timestamp?: string;
+}
+
+export interface SignalEvent {
+  index: number;
+  timestamp: string;
+  signal_type: string;
+  price: number;
+  position: number;
 }
 
 export interface SimulationResult {
@@ -66,15 +84,25 @@ export interface SimulationResult {
   last_entry_rsi: number;
   last_highest_since_buy: number;
   trades: TradeRecord[];
+  signal_log: SignalEvent[];
   sharpe_ratio: number;
   sortino_ratio: number;
   calmar_ratio: number;
   annual_return: number;
 }
 
+export interface ParameterRange {
+  name: string;
+  min: number;
+  max: number;
+  step: number;
+}
+
 export interface StrategyInfo {
   key: string;
   name: string;
+  ranges: ParameterRange[];
+  defaults: Record<string, number>;
 }
 
 export interface GenerationResult {
@@ -87,6 +115,10 @@ export interface GenerationResult {
 export interface ParetoSolution {
   objectives: number[];
   parameters: Record<string, number>;
+  /// Full metric snapshot — includes metrics not selected as NSGA-II
+  /// objectives so the Solutions table can render every column. Backend
+  /// returns `{}` for rows persisted before migration 004.
+  metrics?: Record<string, number>;
   rank: number;
   crowding_distance: number;
 }
@@ -96,4 +128,34 @@ export interface PositionInfo {
   buy_price: number;
   buy_volume: number;
   pnl_pct: number;
+}
+
+export interface AutoTradeStatus {
+  running: boolean;
+  market: string;
+  strategy: string;
+  last_signal: string;
+  last_check: string;
+}
+
+export interface AutoTradeLog {
+  timestamp: string;
+  level: string;
+  message: string;
+}
+
+export interface AutoTradeEvent {
+  side: string;
+  market: string;
+  price: number;
+  volume: number;
+  pnl: number | null;
+  signal: string;
+  strategy: string;
+}
+
+export interface UpdateResult {
+  market: string;
+  timeframe: string;
+  new_candles: number;
 }

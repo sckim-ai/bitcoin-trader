@@ -1,9 +1,12 @@
 import { create } from "zustand";
-import type { PositionInfo } from "../types";
+import type { AutoTradeStatus, PositionInfo } from "../types";
 import {
   getCurrentPrice,
   getBalance,
   getPosition,
+  startAutoTrading as apiStartAutoTrading,
+  stopAutoTrading as apiStopAutoTrading,
+  getAutoTradingStatus as apiGetAutoTradingStatus,
 } from "../lib/api";
 
 interface TradingState {
@@ -13,6 +16,8 @@ interface TradingState {
   balanceCoin: number;
   position: PositionInfo | null;
   isMonitoring: boolean;
+  isAutoTrading: boolean;
+  autoTradingStatus: AutoTradeStatus | null;
   logs: string[];
   monitorInterval: ReturnType<typeof setInterval> | null;
   // actions
@@ -21,6 +26,9 @@ interface TradingState {
   fetchPosition: (market: string) => Promise<void>;
   startMonitoring: (market: string) => void;
   stopMonitoring: () => void;
+  startAutoTrading: (market: string, strategyKey: string) => Promise<void>;
+  stopAutoTrading: () => Promise<void>;
+  fetchAutoTradingStatus: () => Promise<void>;
   addLog: (msg: string) => void;
 }
 
@@ -31,6 +39,8 @@ export const useTradingStore = create<TradingState>((set, get) => ({
   balanceCoin: 0,
   position: null,
   isMonitoring: false,
+  isAutoTrading: false,
+  autoTradingStatus: null,
   logs: [],
   monitorInterval: null,
 
@@ -74,7 +84,6 @@ export const useTradingStore = create<TradingState>((set, get) => ({
     }, 5000);
 
     set({ isMonitoring: true, monitorInterval: interval });
-    // Initial fetch
     get().fetchPrice(market);
     get().fetchBalance();
     get().fetchPosition(market);
@@ -87,6 +96,39 @@ export const useTradingStore = create<TradingState>((set, get) => ({
     }
     set({ isMonitoring: false, monitorInterval: null });
     get().addLog("[INFO] Monitoring stopped");
+  },
+
+  startAutoTrading: async (market: string, strategyKey: string) => {
+    try {
+      const msg = await apiStartAutoTrading(market, strategyKey);
+      set({ isAutoTrading: true });
+      get().addLog(`[SUCCESS] ${msg}`);
+      // Also start monitoring for price display
+      if (!get().isMonitoring) {
+        get().startMonitoring(market);
+      }
+    } catch (e) {
+      get().addLog(`[ERROR] Auto-trading start failed: ${e}`);
+    }
+  },
+
+  stopAutoTrading: async () => {
+    try {
+      const msg = await apiStopAutoTrading();
+      set({ isAutoTrading: false, autoTradingStatus: null });
+      get().addLog(`[SUCCESS] ${msg}`);
+    } catch (e) {
+      get().addLog(`[ERROR] Auto-trading stop failed: ${e}`);
+    }
+  },
+
+  fetchAutoTradingStatus: async () => {
+    try {
+      const status = await apiGetAutoTradingStatus();
+      set({ isAutoTrading: status.running, autoTradingStatus: status });
+    } catch {
+      // ignore
+    }
   },
 
   addLog: (msg: string) => {

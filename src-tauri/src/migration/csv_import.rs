@@ -41,25 +41,71 @@ pub fn import_csv(
     }
     tx.commit()?;
 
+    // Keep day_psy column consistent with newly imported OHLCV.
+    let _ = crate::core::day_psy_store::refresh_day_psy(conn, market)?;
+
     Ok(count)
 }
 
 /// Load candles from the market_data table for a given market and timeframe,
-/// ordered by timestamp ascending.
+/// ordered by timestamp ascending. If `limit` is Some(n), returns only the latest n.
 pub fn load_candles(
     conn: &Connection,
     market: &str,
     timeframe: &str,
+    limit: Option<u32>,
 ) -> Result<Vec<Candle>, Box<dyn std::error::Error>> {
-    let mut stmt = conn.prepare(
-        "SELECT timestamp, open, high, low, close, volume
-         FROM market_data
-         WHERE market = ?1 AND timeframe = ?2
-         ORDER BY timestamp ASC",
-    )?;
+    load_candles_range(conn, market, timeframe, limit, None, None)
+}
+
+/// Load candles with optional ISO-8601 timestamp bounds.
+/// `since` and `until` are inclusive; either may be None.
+/// When `limit` is set together with range bounds, the newest `limit` candles
+/// within the range are returned.
+pub fn load_candles_range(
+    conn: &Connection,
+    market: &str,
+    timeframe: &str,
+    limit: Option<u32>,
+    since: Option<&str>,
+    until: Option<&str>,
+) -> Result<Vec<Candle>, Box<dyn std::error::Error>> {
+    let mut where_clauses = String::from("market = ?1 AND timeframe = ?2");
+    let mut bound_args: Vec<&dyn rusqlite::ToSql> = vec![&market, &timeframe];
+    let mut idx: usize = 3;
+    if let Some(s) = since.as_ref() {
+        where_clauses.push_str(&format!(" AND timestamp >= ?{}", idx));
+        bound_args.push(s);
+        idx += 1;
+    }
+    if let Some(u) = until.as_ref() {
+        where_clauses.push_str(&format!(" AND timestamp <= ?{}", idx));
+        bound_args.push(u);
+    }
+
+    let sql = match limit {
+        Some(n) => format!(
+            "SELECT timestamp, open, high, low, close, volume FROM (
+                SELECT timestamp, open, high, low, close, volume
+                FROM market_data
+                WHERE {}
+                ORDER BY timestamp DESC LIMIT {}
+             ) ORDER BY timestamp ASC",
+            where_clauses, n
+        ),
+        None => format!(
+            "SELECT timestamp, open, high, low, close, volume
+             FROM market_data
+             WHERE {}
+             ORDER BY timestamp ASC",
+            where_clauses
+        ),
+    };
+
+    let mut stmt = conn.prepare(&sql)?;
 
     let candles = stmt
-        .query_map(params![market, timeframe], |row| {
+        .query_map(rusqlite::params_from_iter(bound_args), |row| {
             let ts_str: String = row.get(0)?;
             let open: f64 = row.get(1)?;
             let high: f64 = row.get(2)?;
@@ -117,7 +163,7 @@ mod tests {
         let count = import_csv(&conn, &csv_path, "BTC", "hour").unwrap();
         assert_eq!(count, 2);
 
-        let candles = load_candles(&conn, "BTC", "hour").unwrap();
+        let candles = load_candles(&conn, "BTC", "hour", None).unwrap();
         assert_eq!(candles.len(), 2);
         assert!((candles[0].close - 102.0).abs() < 1e-10);
         assert!((candles[1].volume - 1500.0).abs() < 1e-10);
@@ -141,7 +187,7 @@ mod tests {
         let count2 = import_csv(&conn, &csv_path, "BTC", "hour").unwrap();
         assert_eq!(count2, 0);
 
-        let candles = load_candles(&conn, "BTC", "hour").unwrap();
+        let candles = load_candles(&conn, "BTC", "hour", None).unwrap();
         assert_eq!(candles.len(), 1);
     }
 }

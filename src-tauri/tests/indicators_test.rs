@@ -271,32 +271,29 @@ fn test_stochastic_constant_price() {
 
 #[test]
 fn test_psy_all_rises() {
-    // All rises: 100, 101, 102, ..., 120
+    // All rises — legacy-compatible `(up - down) / period` → +1.0
     let closes: Vec<f64> = (0..21).map(|i| 100.0 + i as f64).collect();
     let candles = make_candles(&closes);
     let ind = calculate_all(&candles);
-    // psy_hour (period=12): at bar 12, all 12 changes are rises
-    assert_relative_eq!(ind[12].psy_hour, 100.0, epsilon = 1e-10);
+    assert_relative_eq!(ind[12].psy_hour, 1.0, epsilon = 1e-10);
 }
 
 #[test]
 fn test_psy_all_drops() {
-    // All drops: 120, 119, 118, ..., 100
+    // All drops → -1.0
     let closes: Vec<f64> = (0..21).map(|i| 120.0 - i as f64).collect();
     let candles = make_candles(&closes);
     let ind = calculate_all(&candles);
-    // psy_hour should be 0
-    assert_relative_eq!(ind[12].psy_hour, 0.0, epsilon = 1e-10);
+    assert_relative_eq!(ind[12].psy_hour, -1.0, epsilon = 1e-10);
 }
 
 #[test]
 fn test_psy_alternating() {
-    // Alternating: 100, 101, 100, 101, ... → 50% rises
+    // Alternating up/down → 0.0 (equal counts)
     let closes: Vec<f64> = (0..50).map(|i| if i % 2 == 0 { 100.0 } else { 101.0 }).collect();
     let candles = make_candles(&closes);
     let ind = calculate_all(&candles);
-    // psy_hour (12): half are rises, half are drops → 50
-    assert_relative_eq!(ind[12].psy_hour, 50.0, epsilon = 1e-10);
+    assert_relative_eq!(ind[12].psy_hour, 0.0, epsilon = 1e-10);
 }
 
 // ─── calculate_incremental Tests ───
@@ -336,9 +333,12 @@ fn test_indicator_set_default() {
 #[test]
 fn test_trading_parameters_default() {
     let params = bitcoin_trader_lib::models::trading::TradingParameters::default();
-    assert_relative_eq!(params.urgent_buy_volume_threshold, 30000.0, epsilon = 1e-10);
+    // Values taken verbatim from TradingConfig_V3_RegimeAdaptive_20260401_140149.json
+    assert_relative_eq!(params.v3_urgent_buy_volume_lo, 21000.0, epsilon = 1e-10);
+    assert_relative_eq!(params.v3_buy_psy_lo, 0.14, epsilon = 1e-10);
+    assert_relative_eq!(params.v3_buy_psy_hi, -0.24, epsilon = 1e-10);
     assert_relative_eq!(params.v3_fee_rate, 0.0005, epsilon = 1e-10);
-    assert_eq!(params.v3_min_hold_bars, 6);
+    assert_eq!(params.v3_min_hold_bars, 21);
 }
 
 #[test]

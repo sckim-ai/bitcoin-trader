@@ -1,13 +1,16 @@
 import type {
   Candle,
+  DataRange,
   MarketData,
   SimulationResult,
   StrategyInfo,
   ParetoSolution,
   PositionInfo,
+  AutoTradeStatus,
+  UpdateResult,
 } from "../types";
 
-const isTauri = "__TAURI__" in window;
+const isTauri = "__TAURI_INTERNALS__" in window;
 const API_BASE = "http://localhost:3741";
 
 // --- Platform-aware invoke ---
@@ -61,10 +64,13 @@ export async function loadCsvData(
 
 export async function getCandles(
   market: string,
-  timeframe: string
+  timeframe: string,
+  limit?: number
 ): Promise<Candle[]> {
-  if (isTauri) return tauriInvoke("get_candles", { market, timeframe });
-  return httpGet("/api/market/candles", { market, timeframe });
+  if (isTauri) return tauriInvoke("get_candles", { market, timeframe, limit });
+  const params: Record<string, string> = { market, timeframe };
+  if (limit) params.limit = String(limit);
+  return httpGet("/api/market/candles", params);
 }
 
 export async function getMarketData(
@@ -80,30 +86,108 @@ export async function runSimulation(
   strategyKey: string,
   market: string,
   timeframe: string,
-  params: Record<string, number>
+  params: Record<string, number>,
+  since?: string | null,
+  until?: string | null
 ): Promise<SimulationResult> {
-  if (isTauri) return tauriInvoke("run_simulation", { strategyKey, market, timeframe, params });
+  if (isTauri)
+    return tauriInvoke("run_simulation", {
+      strategyKey,
+      market,
+      timeframe,
+      params,
+      since: since ?? null,
+      until: until ?? null,
+    });
   return httpPost("/api/simulation/run", {
     strategy_key: strategyKey,
     market,
     timeframe,
     params,
+    since: since ?? null,
+    until: until ?? null,
   });
 }
 
-export async function listStrategies(): Promise<StrategyInfo[]> {
-  if (isTauri) return tauriInvoke("list_strategies");
-  return httpGet("/api/strategies");
+export async function listStrategies(market?: string): Promise<StrategyInfo[]> {
+  if (isTauri) return tauriInvoke("list_strategies", { market: market ?? null });
+  const qs = market ? `?market=${encodeURIComponent(market)}` : "";
+  return httpGet(`/api/strategies${qs}`);
 }
 
+export async function getDataRange(market: string, timeframe: string): Promise<DataRange> {
+  if (isTauri) return tauriInvoke("get_data_range", { market, timeframe });
+  return httpGet(
+    `/api/market/range?market=${encodeURIComponent(market)}&timeframe=${encodeURIComponent(timeframe)}`
+  );
+}
+
+// Start an optimization run. Returns `run_id` immediately; the actual work
+// runs in the background and emits `opt:gen` and `opt:done` events that
+// the UI listens to (see OptimizationPage).
 export async function startOptimization(
   strategyKey: string,
   market: string,
   timeframe: string,
   config: Record<string, unknown>
-): Promise<ParetoSolution[]> {
+): Promise<number> {
   if (isTauri) return tauriInvoke("start_optimization", { strategyKey, market, timeframe, config });
   throw new Error("Optimization is only available in desktop mode");
+}
+
+export async function cancelOptimization(): Promise<boolean> {
+  if (isTauri) return tauriInvoke("cancel_optimization");
+  throw new Error("Optimization is only available in desktop mode");
+}
+
+export async function getOptimizationStatus(): Promise<{ running: boolean; run_id?: number; last_generation?: number }> {
+  if (isTauri) return tauriInvoke("get_optimization_status");
+  throw new Error("Optimization is only available in desktop mode");
+}
+
+export interface OptimizationRunSummary {
+  id: number;
+  strategy_key: string;
+  population_size: number;
+  generations: number;
+  objectives: string;
+  status: string;
+  started_at: string;
+  completed_at: string | null;
+  best_return: number | null;
+}
+
+export async function listOptimizationRuns(limit = 50): Promise<OptimizationRunSummary[]> {
+  if (isTauri) return tauriInvoke("list_optimization_runs", { limit });
+  throw new Error("Optimization is only available in desktop mode");
+}
+
+export async function getOptimizationRunResults(runId: number): Promise<ParetoSolution[]> {
+  if (isTauri) return tauriInvoke("get_optimization_run_results", { runId });
+  throw new Error("Optimization is only available in desktop mode");
+}
+
+export interface GenerationSnapshot {
+  generation: number;
+  front: ParetoSolution[];
+}
+
+export async function getOptimizationRunHistory(runId: number): Promise<GenerationSnapshot[]> {
+  if (isTauri) return tauriInvoke("get_optimization_run_history", { runId });
+  throw new Error("Optimization is only available in desktop mode");
+}
+
+export async function deleteOptimizationRun(runId: number): Promise<void> {
+  if (isTauri) return tauriInvoke("delete_optimization_run", { runId });
+  throw new Error("Optimization is only available in desktop mode");
+}
+
+// Tauri event subscriptions (Tauri-only; web bypasses via HTTP polling).
+export async function onOptimizationEvent<T>(event: string, handler: (payload: T) => void): Promise<() => void> {
+  if (!isTauri) return () => {};
+  const { listen } = await import("@tauri-apps/api/event");
+  const unlisten = await listen<T>(event, (e) => handler(e.payload));
+  return unlisten;
 }
 
 export async function getCurrentPrice(market: string): Promise<number> {
@@ -219,4 +303,39 @@ export interface MigrationResult {
 export async function migrateFromCsv(csvDir: string): Promise<MigrationResult> {
   if (isTauri) return tauriInvoke("migrate_from_csv", { csvDir });
   throw new Error("CSV migration is only available in desktop mode");
+}
+
+// --- Auto-trading API ---
+
+export async function startAutoTrading(
+  market: string,
+  strategyKey: string
+): Promise<string> {
+  if (isTauri) return tauriInvoke("start_auto_trading", { market, strategyKey });
+  throw new Error("Auto-trading is only available in desktop mode");
+}
+
+export async function stopAutoTrading(): Promise<string> {
+  if (isTauri) return tauriInvoke("stop_auto_trading");
+  throw new Error("Auto-trading is only available in desktop mode");
+}
+
+export async function getAutoTradingStatus(): Promise<AutoTradeStatus> {
+  if (isTauri) return tauriInvoke("get_auto_trading_status");
+  throw new Error("Auto-trading is only available in desktop mode");
+}
+
+// --- Data Update API ---
+
+export async function updateMarketData(
+  market: string,
+  timeframe: string
+): Promise<number> {
+  if (isTauri) return tauriInvoke("update_market_data", { market, timeframe });
+  throw new Error("Data update is only available in desktop mode");
+}
+
+export async function autoUpdateAllMarkets(): Promise<UpdateResult[]> {
+  if (isTauri) return tauriInvoke("auto_update_all_markets");
+  throw new Error("Data update is only available in desktop mode");
 }

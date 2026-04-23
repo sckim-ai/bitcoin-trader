@@ -88,6 +88,18 @@ impl UpbitClient {
         interval: &str,
         count: u32,
     ) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
+        self.get_candles_before(market, interval, count, None).await
+    }
+
+    /// Fetch candles with optional `to` parameter for pagination.
+    /// `to`: ISO 8601 timestamp — returns candles before this time.
+    pub async fn get_candles_before(
+        &self,
+        market: &str,
+        interval: &str,
+        count: u32,
+        to: Option<&str>,
+    ) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
         let path = match interval {
             "1" | "3" | "5" | "15" | "30" | "60" | "240" => {
                 format!("minutes/{}", interval)
@@ -96,10 +108,13 @@ impl UpbitClient {
             "week" => "weeks".to_string(),
             _ => format!("minutes/{}", interval),
         };
-        let url = format!(
+        let mut url = format!(
             "https://api.upbit.com/v1/candles/{}?market={}&count={}",
             path, market, count
         );
+        if let Some(to_ts) = to {
+            url.push_str(&format!("&to={}", to_ts));
+        }
         let resp: Vec<serde_json::Value> = self.client.get(&url).send().await?.json().await?;
         Ok(resp)
     }

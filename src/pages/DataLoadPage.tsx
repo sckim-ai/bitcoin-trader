@@ -1,19 +1,49 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useMarketDataStore } from "../stores/marketDataStore";
 import CandlestickChart from "../components/charts/CandlestickChart";
 import { Card, CardContent } from "../components/ui/Card";
 import { MetricCard } from "../components/ui/MetricCard";
+import { getCurrentPrice } from "../lib/api";
 
 const MARKETS = ["BTC", "ETH"];
 const TIMEFRAMES = ["hour", "day", "week"];
+const LIMITS = [100, 500, 1000, 5000];
+const LIVE_POLL_MS = 2000;
 
 export default function DataLoadPage() {
-  const { candles, market, timeframe, loading, error, setMarket, setTimeframe, loadCandles } =
+  const { candles, market, timeframe, limit, loading, error, setMarket, setTimeframe, setLimit, loadCandles, refreshCandles } =
     useMarketDataStore();
+  const [livePrice, setLivePrice] = useState<number | null>(null);
 
   useEffect(() => {
     loadCandles();
-  }, [market, timeframe, loadCandles]);
+  }, [market, timeframe, limit, loadCandles]);
+
+  // Periodic refresh so corrected high/low from background UPSERT reaches chart.
+  useEffect(() => {
+    const id = setInterval(() => refreshCandles(), 30_000);
+    return () => clearInterval(id);
+  }, [refreshCandles]);
+
+  // Poll live ticker every 2s; chart updates last bar with this price.
+  useEffect(() => {
+    setLivePrice(null);
+    const apiMarket = `KRW-${market}`;
+    let cancelled = false;
+
+    const tick = async () => {
+      try {
+        const p = await getCurrentPrice(apiMarket);
+        if (!cancelled) setLivePrice(p);
+      } catch { /* ignore transient errors */ }
+    };
+    tick();
+    const id = setInterval(tick, LIVE_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [market]);
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -53,6 +83,15 @@ export default function DataLoadPage() {
               </button>
             ))}
           </div>
+          <select
+            value={limit}
+            onChange={(e) => setLimit(Number(e.target.value))}
+            className="bg-[#0c0c0f] border border-[#1e1e26] rounded-lg px-3 py-1.5 text-xs font-semibold text-zinc-300"
+          >
+            {LIMITS.map((n) => (
+              <option key={n} value={n}>{n} bars</option>
+            ))}
+          </select>
         </div>
       </div>
 
@@ -73,7 +112,7 @@ export default function DataLoadPage() {
       {candles.length > 0 && (
         <Card>
           <CardContent className="p-2">
-            <CandlestickChart candles={candles} />
+            <CandlestickChart candles={candles} timeframe={timeframe} livePrice={livePrice} />
           </CardContent>
         </Card>
       )}

@@ -1,7 +1,29 @@
 use crate::models::market::{Candle, IndicatorSet};
+use chrono::NaiveDate;
+use std::collections::BTreeMap;
 
 /// Calculate all technical indicators for a slice of candles.
 pub fn calculate_all(candles: &[Candle]) -> Vec<IndicatorSet> {
+    calculate_all_with_day_psy(candles, None)
+}
+
+/// Clean variant (non-legacy): given an optional map of `NaiveDate →
+/// day-scale new-PSY value` (KST dates), fill `psy_day` on each hourly bar
+/// with the **previous KST date's** closed day-PSY.
+///
+/// Differences from the legacy C# pipeline (`DataUpdateManager.cs:380-384`):
+/// * No silent hour-PSY fallback. Unavailable day-PSY is emitted as
+///   `f64::NAN` so strategies can detect warmup/missing data explicitly.
+/// * Comparison `NaN < threshold` is always `false`, so buy-conditions
+///   relying on negative thresholds naturally skip missing bars without
+///   adding explicit NaN checks.
+/// * Caller supplies map via `Some(...)`. `None` means "no day-scale data
+///   available" and every bar gets `NaN` (used by tests for strategies
+///   that don't consume `psy_day`).
+pub fn calculate_all_with_day_psy(
+    candles: &[Candle],
+    day_psy_kst: Option<&BTreeMap<NaiveDate, f64>>,
+) -> Vec<IndicatorSet> {
     let n = candles.len();
     if n == 0 {
         return Vec::new();
@@ -20,8 +42,22 @@ pub fn calculate_all(candles: &[Candle]) -> Vec<IndicatorSet> {
     let atr = calc_atr(&highs, &lows, &closes, 14);
     let (adx, di_plus, di_minus) = calc_adx(&highs, &lows, &closes, 14);
     let (stoch_k, stoch_d) = calc_stochastic(&highs, &lows, &closes, 14, 3);
-    let psy_hour = calc_psy(&closes, 12);
-    let psy_day = calc_psy(&closes, 40);
+    let psy_hour = calc_psy(&closes, 10);
+
+    let empty_map: BTreeMap<NaiveDate, f64> = BTreeMap::new();
+    let effective_map = day_psy_kst.unwrap_or(&empty_map);
+    let psy_day: Vec<f64> = candles
+        .iter()
+        .map(|c| {
+            let kst = c.timestamp + chrono::Duration::hours(9);
+            let prev_date = kst.date_naive() - chrono::Duration::days(1);
+            effective_map
+                .get(&prev_date)
+                .copied()
+                .filter(|v| *v != 0.0)
+                .unwrap_or(f64::NAN)
+        })
+        .collect();
 
     let mut result = Vec::with_capacity(n);
     for i in 0..n {
@@ -342,7 +378,34 @@ fn calc_stochastic(highs: &[f64], lows: &[f64], closes: &[f64], k_period: usize,
 
 // ─── PSY ───
 
-fn calc_psy(closes: &[f64], period: usize) -> Vec<f64> {
+/// Legacy `NewPsy` — verbatim port of C# `DataUpdateManager.cs:294-318`
+/// and `UpbitApiClient.cs:856-883`:
+///   NewPsy = (upD × (upC / t) - downD × (downC / t)) / period
+/// where upD/downD = up/down bar counts, upC/downC = sum of up/down magnitudes,
+/// t = total magnitude. Range is `[-1, +1]` and the metric is **weighted by
+/// price-move size** — a few large-move bars dominate many small-move bars.
+/// Period is 10 for both hourly and daily PSY in legacy.
+/// Build a day-PSY lookup table keyed by KST date.
+///
+/// `day_candles` must be sorted ascending by timestamp. For each candle we
+/// compute the legacy NewPsy (period 10) on the close series and index the
+/// result under the KST date of that candle. Warmup bars (first 10) remain
+/// at 0.0 — callers treat 0.0 as "no day-scale data", same as a missing key.
+pub fn build_day_psy_map(day_candles: &[Candle]) -> BTreeMap<NaiveDate, f64> {
+    let mut map = BTreeMap::new();
+    if day_candles.is_empty() {
+        return map;
+    }
+    let closes: Vec<f64> = day_candles.iter().map(|c| c.close).collect();
+    let psy_values = calc_psy(&closes, 10);
+    for (c, &psy) in day_candles.iter().zip(psy_values.iter()) {
+        let kst_date = (c.timestamp + chrono::Duration::hours(9)).date_naive();
+        map.insert(kst_date, psy);
+    }
+    map
+}
+
+pub fn calc_psy(closes: &[f64], period: usize) -> Vec<f64> {
     let n = closes.len();
     let mut out = vec![0.0; n];
     if n <= period {
@@ -350,13 +413,22 @@ fn calc_psy(closes: &[f64], period: usize) -> Vec<f64> {
     }
 
     for i in period..n {
-        let mut up_count = 0;
+        let (mut up_d, mut down_d) = (0.0f64, 0.0f64);
+        let (mut up_c, mut down_c) = (0.0f64, 0.0f64);
         for j in (i + 1 - period)..=i {
-            if closes[j] > closes[j - 1] {
-                up_count += 1;
+            let ch = closes[j] - closes[j - 1];
+            if ch > 0.0 {
+                up_d += 1.0;
+                up_c += ch;
+            } else if ch < 0.0 {
+                down_d += 1.0;
+                down_c -= ch;
             }
         }
-        out[i] = 100.0 * up_count as f64 / period as f64;
+        let t = up_c + down_c;
+        if t > 0.0 {
+            out[i] = (up_d * (up_c / t) - down_d * (down_c / t)) / period as f64;
+        }
     }
     out
 }
