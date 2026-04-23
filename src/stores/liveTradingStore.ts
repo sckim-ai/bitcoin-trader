@@ -9,6 +9,7 @@ import {
   stopSession as apiStop,
   deleteSession as apiDelete,
   createPreset as apiCreatePreset,
+  createDefaultPreset as apiCreateDefaultPreset,
 } from "../lib/live";
 
 interface LiveTradingState {
@@ -24,6 +25,7 @@ interface LiveTradingState {
 
   createSession: (args: Parameters<typeof apiCreateSession>[0]) => Promise<void>;
   createPreset: (args: Parameters<typeof apiCreatePreset>[0]) => Promise<void>;
+  createDefaultPreset: (name: string, strategyKey: string) => Promise<void>;
   startSession: (id: number) => Promise<void>;
   stopSession: (id: number) => Promise<void>;
   deleteSession: (id: number) => Promise<void>;
@@ -68,6 +70,11 @@ export const useLiveTradingStore = create<LiveTradingState>((set, get) => ({
 
   createPreset: async (args) => {
     await apiCreatePreset(args);
+    await get().refreshPresets();
+  },
+
+  createDefaultPreset: async (name, strategyKey) => {
+    await apiCreateDefaultPreset(name, strategyKey);
     await get().refreshPresets();
   },
 
