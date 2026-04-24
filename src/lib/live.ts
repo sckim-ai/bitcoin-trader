@@ -4,6 +4,7 @@ import type {
   LiveTrade,
   CreateSessionArgs,
   SavePresetArgs,
+  TickData,
 } from "../types";
 
 const isTauri = "__TAURI_INTERNALS__" in window;
@@ -36,3 +37,29 @@ export const deleteSession = (id: number): Promise<void> =>
   invoke("delete_session", { id });
 export const listSessionTrades = (sessionId: number): Promise<LiveTrade[]> =>
   invoke("list_session_trades", { sessionId });
+
+// ─── Market Ticks ───
+/// Subscribe to market ticks. Returns an unsubscribe function.
+/// Tauri: uses the "market:tick" event emitted by the backend.
+/// PWA: opens an EventSource to `/sse/market`.
+export async function subscribeTicks(
+  onTick: (t: TickData) => void
+): Promise<() => void> {
+  if (isTauri) {
+    const { listen } = await import("@tauri-apps/api/event");
+    const unlisten = await listen<TickData>("market:tick", (e) => onTick(e.payload));
+    return () => {
+      unlisten();
+    };
+  }
+  // PWA fallback
+  const es = new EventSource("/sse/market");
+  es.addEventListener("tick", (ev) => {
+    try {
+      onTick(JSON.parse((ev as MessageEvent).data) as TickData);
+    } catch {}
+  });
+  return () => {
+    es.close();
+  };
+}

@@ -237,3 +237,11 @@ export interface SessionCycleOutput {
   current_position: string;
   current_equity: number;
 }
+
+export interface TickData {
+  market: string;
+  price: number;
+  change_pct: number;
+  volume_24h: number;
+  ts_ms: number;
+}
