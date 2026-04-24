@@ -60,7 +60,9 @@ const UPBIT_WS_URL: &str = "wss://api.upbit.com/websocket/v1";
 /// Keepalive ping interval — Upbit disconnects after ~3 minutes of silence.
 const PING_INTERVAL: Duration = Duration::from_secs(120);
 
-/// Start the broker as a background task and return a handle.
+/// Start the broker on its own dedicated Tokio runtime thread and return a
+/// handle. Having a self-owned runtime lets `start()` be called from any sync
+/// context (e.g. app bootstrap before Tauri's runtime is available).
 /// Broadcasts capacity = 256 ticks; lagging consumers get `RecvError::Lagged`
 /// which they should treat as "drop and resubscribe to latest" (not fatal).
 pub fn start(markets: Vec<String>) -> TickBrokerHandle {
@@ -71,7 +73,11 @@ pub fn start(markets: Vec<String>) -> TickBrokerHandle {
         cancel: cancel.clone(),
     };
 
-    tokio::spawn(run_loop(markets, tx, cancel));
+    std::thread::spawn(move || {
+        tokio::runtime::Runtime::new()
+            .expect("tick-broker tokio runtime")
+            .block_on(run_loop(markets, tx, cancel));
+    });
     handle
 }
 
