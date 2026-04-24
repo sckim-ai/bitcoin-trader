@@ -1,6 +1,7 @@
 pub mod routes;
 pub mod ws;
 pub mod middleware;
+pub mod sse;
 
 use crate::state::AppState;
 use axum::Router;
@@ -16,6 +17,7 @@ pub async fn start(state: Arc<AppState>, port: u16) {
     let app = Router::new()
         .merge(routes::api_routes())
         .merge(ws::ws_routes())
+        .merge(sse::sse_routes())
         .layer(cors)
         .with_state(state);
 
