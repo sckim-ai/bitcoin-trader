@@ -1,4 +1,5 @@
 use crate::core::optimizer::Individual;
+use crate::services::tick_broker::TickBrokerHandle;
 use crate::strategies::StrategyRegistry;
 use rusqlite::Connection;
 use std::collections::HashMap;
@@ -33,6 +34,9 @@ pub struct AppState {
     /// Phase 1: 실행 중인 페이퍼 세션 id 집합. 스케줄러가 DB에서 직접
     /// 로드하지만, UI의 즉시성을 위한 캐시.
     pub paper_session_ids: Mutex<HashMap<i64, ()>>,
+    /// Phase 2: Upbit ticker stream broker. `None` only in test contexts
+    /// (`AppState::empty()`); real runtime always has `Some`.
+    pub tick_broker: Option<TickBrokerHandle>,
 }
 
 impl AppState {
@@ -45,6 +49,7 @@ impl AppState {
             auto_trading: Mutex::new(None),
             optimization: Mutex::new(None),
             paper_session_ids: Mutex::new(HashMap::new()),
+            tick_broker: None,
         }
     }
 }

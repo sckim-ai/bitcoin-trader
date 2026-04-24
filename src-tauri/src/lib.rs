@@ -27,12 +27,17 @@ mod app {
         let db_path = dirs_db_path();
         let conn = schema::initialize(&db_path).expect("Failed to initialize database");
 
+        // Phase 2: start the Upbit ticker broker and share its handle.
+        // Tauri Emitter and Axum SSE both subscribe to it.
+        let broker = crate::services::tick_broker::start(vec!["KRW-ETH".to_string()]);
+
         let app_state = AppState {
             db: Mutex::new(conn),
             registry: StrategyRegistry::new(),
             auto_trading: Mutex::new(None),
             optimization: Mutex::new(None),
             paper_session_ids: Mutex::new(std::collections::HashMap::new()),
+            tick_broker: Some(broker.clone()),
         };
 
         let server_state = Arc::new(AppState {
@@ -43,6 +48,7 @@ mod app {
             auto_trading: Mutex::new(None),
             optimization: Mutex::new(None),
             paper_session_ids: Mutex::new(std::collections::HashMap::new()),
+            tick_broker: Some(broker.clone()),
         });
 
         let server_state_clone = server_state.clone();
@@ -84,6 +90,23 @@ mod app {
                         .block_on(async move {
                             crate::services::live_scheduler::run_loop(app_handle, db_clone, cancel_clone).await;
                         });
+                });
+
+                // Phase 2: re-broadcast ticker events to the frontend via Tauri IPC.
+                let tick_handle = app.handle().clone();
+                let mut tick_rx = broker.subscribe();
+                tauri::async_runtime::spawn(async move {
+                    use tauri::Emitter;
+                    loop {
+                        match tick_rx.recv().await {
+                            Ok(t) => { let _ = tick_handle.emit("market:tick", &t); }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                // fell behind — next recv will yield the latest
+                                continue;
+                            }
+                            Err(_) => break,  // channel closed
+                        }
+                    }
                 });
                 Ok(())
             })
