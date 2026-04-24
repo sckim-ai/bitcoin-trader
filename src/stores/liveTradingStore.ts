@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { LiveSession, LiveTrade, Preset } from "../types";
+import type { LiveSession, LiveTrade, Preset, TickData } from "../types";
 import {
   listPresets,
   listSessions,
@@ -9,12 +9,15 @@ import {
   stopSession as apiStop,
   deleteSession as apiDelete,
   deletePreset as apiDeletePreset,
+  subscribeTicks,
 } from "../lib/live";
 
 interface LiveTradingState {
   sessions: LiveSession[];
   presets: Preset[];
   tradesBySession: Record<number, LiveTrade[]>;
+  /// Market-keyed most-recent tick snapshot. Updated by the tick subscription.
+  ticks: Record<string, TickData>;
   loading: boolean;
 
   refreshAll: () => Promise<void>;
@@ -35,6 +38,7 @@ export const useLiveTradingStore = create<LiveTradingState>((set, get) => ({
   sessions: [],
   presets: [],
   tradesBySession: {},
+  ticks: {},
   loading: false,
 
   refreshAll: async () => {
@@ -87,16 +91,52 @@ export const useLiveTradingStore = create<LiveTradingState>((set, get) => ({
   },
 
   subscribeEvents: async () => {
-    if (!("__TAURI_INTERNALS__" in window)) return () => {};
-    const { listen } = await import("@tauri-apps/api/event");
+    const unsubs: Array<() => void> = [];
 
-    const u1 = await listen("session:update", () => {
-      get().refreshSessions();
-    });
-    const u2 = await listen<{ session_id: number }>("session:log", (e) => {
-      console.debug("session:log", e.payload);
-    });
+    // Tauri session events (same as before)
+    if ("__TAURI_INTERNALS__" in window) {
+      const { listen } = await import("@tauri-apps/api/event");
+      const u1 = await listen("session:update", () => { get().refreshSessions(); });
+      const u2 = await listen<{ session_id: number }>("session:log", (e) => {
+        console.debug("session:log", e.payload);
+      });
+      unsubs.push(u1 as () => void, u2 as () => void);
+    }
 
-    return () => { u1(); u2(); };
+    // Market ticks (Tauri event OR SSE fallback)
+    const unsubTicks = await subscribeTicks((tick) => {
+      set((s) => ({ ticks: { ...s.ticks, [tick.market]: tick } }));
+    });
+    unsubs.push(unsubTicks);
+
+    return () => { unsubs.forEach((fn) => fn()); };
   },
 }));
+
+/// Derive current equity and unrealized P/L for a session using the latest tick.
+/// Falls back to the DB-persisted `current_equity` if no tick is available yet.
+export function deriveSessionPnl(session: LiveSession, tick: TickData | undefined) {
+  const baseEquity = session.current_equity ?? session.initial_capital;
+  if (session.current_position !== "holding" || tick == null
+      || session.current_buy_price == null || session.current_buy_volume == null) {
+    return {
+      currentEquity: baseEquity,
+      unrealizedPnl: 0,
+      unrealizedPnlPct: 0,
+      pnlPctSinceStart: baseEquity / session.initial_capital * 100 - 100,
+    };
+  }
+  const unrealized = (tick.price - session.current_buy_price) * session.current_buy_volume;
+  // DB equity snapshot is taken at last cycle's candle close. For real-time
+  // display we overlay the gap between that close and the current tick price.
+  // Since DB equity already includes realized P/L + last candle's mark, we
+  // recompute the holding leg from the buy anchor to tick.
+  const realizedPortion = baseEquity - (session.current_buy_price * session.current_buy_volume);
+  const currentEquity = realizedPortion + tick.price * session.current_buy_volume;
+  return {
+    currentEquity,
+    unrealizedPnl: unrealized,
+    unrealizedPnlPct: (tick.price / session.current_buy_price - 1) * 100,
+    pnlPctSinceStart: currentEquity / session.initial_capital * 100 - 100,
+  };
+}
