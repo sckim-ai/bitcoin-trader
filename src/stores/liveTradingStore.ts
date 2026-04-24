@@ -126,16 +126,13 @@ export function deriveSessionPnl(session: LiveSession, tick: TickData | undefine
       pnlPctSinceStart: baseEquity / session.initial_capital * 100 - 100,
     };
   }
+  // Real-time P/L = baseEquity + (tick price drift from buy price) × volume.
+  // This approximation anchors on buy_price rather than last candle close; the
+  // drift is exact at entry and grows ∝ (last_mark − buy_price) × volume.
+  // For Phase 2 display purposes drift is small (<1% typically); the session
+  // row's `current_equity` remains the authoritative snapshot.
   const unrealized = (tick.price - session.current_buy_price) * session.current_buy_volume;
-  // Approximate real-time overlay:
-  //   baseEquity was computed at the last cycle's candle close (mark-to-market),
-  //   but we don't store that mark price separately. We use `buy_price` as a
-  //   proxy for the mark, yielding an equity estimate that's exact at entry
-  //   and drifts proportionally to (last_mark_price − buy_price) × volume.
-  //   For Phase 2 display purposes the drift is small (typically <1%);
-  //   `current_equity` on the session row is always the authoritative snapshot.
-  const realizedPortion = baseEquity - (session.current_buy_price * session.current_buy_volume);
-  const currentEquity = realizedPortion + tick.price * session.current_buy_volume;
+  const currentEquity = baseEquity + unrealized;
   return {
     currentEquity,
     unrealizedPnl: unrealized,
