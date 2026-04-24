@@ -1,15 +1,17 @@
 import { Button } from "../ui/Button";
 import { Badge } from "../ui/Badge";
-import type { LiveSession } from "../../types";
+import type { LiveSession, TickData } from "../../types";
+import { deriveSessionPnl } from "../../stores/liveTradingStore";
 
 interface Props {
   sessions: LiveSession[];
+  ticks: Record<string, TickData>;
   onStart: (id: number) => void;
   onStop: (id: number) => void;
   onDelete: (id: number) => void;
 }
 
-export default function SessionTable({ sessions, onStart, onStop, onDelete }: Props) {
+export default function SessionTable({ sessions, ticks, onStart, onStop, onDelete }: Props) {
   if (sessions.length === 0) {
     return <p className="text-zinc-500 text-sm">No sessions yet. Create one to start.</p>;
   }
@@ -22,7 +24,8 @@ export default function SessionTable({ sessions, onStart, onStop, onDelete }: Pr
           <th className="text-left">Status</th>
           <th className="text-left">Position</th>
           <th className="text-right">Equity</th>
-          <th className="text-right">P/L %</th>
+          <th className="text-right">Total P/L</th>
+          <th className="text-right">Unrealized</th>
           <th className="text-left">Signal</th>
           <th className="text-right">Last Cycle</th>
           <th></th>
@@ -30,10 +33,12 @@ export default function SessionTable({ sessions, onStart, onStop, onDelete }: Pr
       </thead>
       <tbody>
         {sessions.map((s) => {
-          const pnlPct = s.current_equity != null
-            ? ((s.current_equity / s.initial_capital - 1) * 100)
-            : 0;
-          const pnlColor = pnlPct > 0 ? "text-emerald-400" : pnlPct < 0 ? "text-rose-400" : "text-zinc-400";
+          const tick = ticks[s.market];
+          const derived = deriveSessionPnl(s, tick);
+          const totalColor = derived.pnlPctSinceStart > 0 ? "text-emerald-400"
+            : derived.pnlPctSinceStart < 0 ? "text-rose-400" : "text-zinc-400";
+          const unrColor = derived.unrealizedPnlPct > 0 ? "text-emerald-400"
+            : derived.unrealizedPnlPct < 0 ? "text-rose-400" : "text-zinc-500";
           return (
             <tr key={s.id} className="border-b border-zinc-900 hover:bg-zinc-900/40">
               <td className="py-2 font-medium text-zinc-200">{s.label}</td>
@@ -54,10 +59,15 @@ export default function SessionTable({ sessions, onStart, onStop, onDelete }: Pr
                 </Badge>
               </td>
               <td className="text-right font-data text-zinc-200">
-                {s.current_equity != null ? s.current_equity.toLocaleString() : "--"}
+                {Math.round(derived.currentEquity).toLocaleString()}
               </td>
-              <td className={`text-right font-data ${pnlColor}`}>
-                {pnlPct.toFixed(2)}%
+              <td className={`text-right font-data ${totalColor}`}>
+                {derived.pnlPctSinceStart.toFixed(2)}%
+              </td>
+              <td className={`text-right font-data ${unrColor}`}>
+                {s.current_position === "holding"
+                  ? `${derived.unrealizedPnlPct.toFixed(2)}%`
+                  : "--"}
               </td>
               <td className="text-zinc-400">{s.last_signal ?? "--"}</td>
               <td className="text-right text-zinc-500 text-xs">
