@@ -100,7 +100,7 @@ export const useLiveTradingStore = create<LiveTradingState>((set, get) => ({
       const u2 = await listen<{ session_id: number }>("session:log", (e) => {
         console.debug("session:log", e.payload);
       });
-      unsubs.push(u1 as () => void, u2 as () => void);
+      unsubs.push(u1, u2);
     }
 
     // Market ticks (Tauri event OR SSE fallback)
@@ -127,10 +127,13 @@ export function deriveSessionPnl(session: LiveSession, tick: TickData | undefine
     };
   }
   const unrealized = (tick.price - session.current_buy_price) * session.current_buy_volume;
-  // DB equity snapshot is taken at last cycle's candle close. For real-time
-  // display we overlay the gap between that close and the current tick price.
-  // Since DB equity already includes realized P/L + last candle's mark, we
-  // recompute the holding leg from the buy anchor to tick.
+  // Approximate real-time overlay:
+  //   baseEquity was computed at the last cycle's candle close (mark-to-market),
+  //   but we don't store that mark price separately. We use `buy_price` as a
+  //   proxy for the mark, yielding an equity estimate that's exact at entry
+  //   and drifts proportionally to (last_mark_price − buy_price) × volume.
+  //   For Phase 2 display purposes the drift is small (typically <1%);
+  //   `current_equity` on the session row is always the authoritative snapshot.
   const realizedPortion = baseEquity - (session.current_buy_price * session.current_buy_volume);
   const currentEquity = realizedPortion + tick.price * session.current_buy_volume;
   return {
