@@ -221,59 +221,49 @@ export default function CandleChart({
     }
   }, [marketData]);
 
-  // ── 2b. Session markers ──────────────────────────────────────────────
-  // Markers attach via a transparent line series. Each session series rides
-  // on its own hidden price scale (`priceScaleId: 'markers-<id>'`) so the
-  // marker line value (which we set to the trade price for natural placement)
-  // does NOT participate in the main candle Y-axis auto-fit. Without this,
-  // an early-session value of 0 forced the chart to include 0..5M, squashing
-  // recent action into a sliver.
+  // ── 2b. Trade markers ────────────────────────────────────────────────
+  // Markers attach DIRECTLY to the candlestick series so `belowBar` /
+  // `aboveBar` positions the arrow against the actual candle low / high
+  // (with lightweight-charts' default 4-pixel breathing room). Earlier
+  // we used a per-session dummy line series with a separate hidden price
+  // scale, but `aboveBar/belowBar` then meant "above/below the line's
+  // own data point", placing arrows at trade.price — far from the candle's
+  // wick on volatile bars.
+  //
+  // Per-session colour is preserved through individual marker.color values;
+  // we just merge all sessions' trades into one chronologically-sorted
+  // marker array (lightweight-charts requires ascending time order).
   useEffect(() => {
-    const chart = chartRef.current;
-    if (!chart) return;
+    const candleSeries = candleSeriesRef.current;
+    if (!candleSeries) return;
 
-    Object.values(sessionSeriesRef.current).forEach(s => chart.removeSeries(s));
+    // Drop legacy per-session dummy series if any are still around. Once
+    // this branch lands they should never be created again, but cleanup
+    // covers the case where the previous render path left them behind.
+    const chart = chartRef.current;
+    if (chart) {
+      Object.values(sessionSeriesRef.current).forEach(s => chart.removeSeries(s));
+    }
     sessionSeriesRef.current = {};
 
     const sessionIds = sessions.map(s => s.id).slice().sort((a, b) => a - b);
+    const allMarkers: SeriesMarker<Time>[] = [];
     for (const session of sessions) {
-      const scaleId = `markers-${session.id}`;
-      const series = chart.addLineSeries({
-        color: "rgba(0,0,0,0)",
-        priceLineVisible: false,
-        lastValueVisible: false,
-        crosshairMarkerVisible: false,
-        priceScaleId: scaleId,
-      });
-      // Hide this overlay scale so it doesn't render axis labels.
-      chart.priceScale(scaleId).applyOptions({ visible: false });
-      sessionSeriesRef.current[session.id] = series;
-
-      const trades = tradesBySession[session.id] ?? [];
       const color = colorFor(session.id, sessionIds);
-      const markers: SeriesMarker<Time>[] = trades.map(t => ({
-        time: isoToUtcSec(t.ts) as UTCTimestamp,
-        position: t.side === "buy" ? "belowBar" : "aboveBar",
-        color,
-        shape: t.side === "buy" ? "arrowUp" : "arrowDown",
-        // Restore label so the user can identify which session a marker
-        // belongs to. The earlier visual misalignment between marker and
-        // signal strip was caused by signal_log being computed from a
-        // different data window than the trades — fixed in store —
-        // not by the label text shifting the arrow.
-        text: t.is_real ? `${session.label} (R)` : session.label,
-        size: t.is_real ? 2 : 1,
-      }));
-      if (markers.length > 0) {
-        // Anchor data uses the trade price so the marker's vertical
-        // position (belowBar / aboveBar) is computed near the candle.
-        series.setData(trades.map(t => ({
+      const trades = tradesBySession[session.id] ?? [];
+      for (const t of trades) {
+        allMarkers.push({
           time: isoToUtcSec(t.ts) as UTCTimestamp,
-          value: t.price,
-        })));
-        series.setMarkers(markers);
+          position: t.side === "buy" ? "belowBar" : "aboveBar",
+          color,
+          shape: t.side === "buy" ? "arrowUp" : "arrowDown",
+          text: t.is_real ? `${session.label} (R)` : session.label,
+          size: t.is_real ? 2 : 1,
+        });
       }
     }
+    allMarkers.sort((a, b) => (a.time as number) - (b.time as number));
+    candleSeries.setMarkers(allMarkers);
   }, [sessions, tradesBySession]);
 
   // ── 3. Overlay toggles ───────────────────────────────────────────────
