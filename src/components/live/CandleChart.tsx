@@ -166,15 +166,23 @@ export default function CandleChart({
       bbSeriesRef.current.push(s);
     }
 
-    // Session markers — one dummy LineSeries per session so we can toggle/
-    // recolour individually. Markers go on each session's own series.
+  }, [marketData]);
+
+  // ── 2b. Session markers (only trades — does NOT touch candleSeries) ───
+  // Splitting this out from candle/indicator updates means session changes
+  // don't re-call setData on the main series, which would otherwise reset
+  // the user's visible window back to the full data range.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+
     Object.values(sessionSeriesRef.current).forEach(s => chart.removeSeries(s));
     sessionSeriesRef.current = {};
 
     const sessionIds = sessions.map(s => s.id).slice().sort((a, b) => a - b);
     for (const session of sessions) {
       const series = chart.addLineSeries({
-        color: "rgba(0,0,0,0)",  // invisible line — markers only
+        color: "rgba(0,0,0,0)",
         priceLineVisible: false,
         lastValueVisible: false,
         crosshairMarkerVisible: false,
@@ -191,14 +199,12 @@ export default function CandleChart({
         text: t.is_real ? `${session.label}!` : session.label,
         size: t.is_real ? 2 : 1,
       }));
-      // setMarkers requires non-empty data on the series. Plant a single
-      // invisible point at the first marker's time so the markers attach.
       if (markers.length > 0) {
         series.setData(markers.map(m => ({ time: m.time, value: 0 })));
         series.setMarkers(markers);
       }
     }
-  }, [marketData, sessions, tradesBySession]);
+  }, [sessions, tradesBySession]);
 
   // ── 3. Overlay toggles ───────────────────────────────────────────────
   useEffect(() => {
@@ -222,14 +228,22 @@ export default function CandleChart({
   // ── 5. Apply user-selected visible window ────────────────────────────
   // Right edge always tracks "now" so the running candle stays in view.
   // Sister chart (SignalLaneChart) follows via useChartSync subscription.
+  // We must re-apply after `setData` runs (effect 2) — otherwise lightweight-
+  // charts' default fit-content can override our scroll. The dependency on
+  // `marketData` covers initial mount; we also re-apply whenever `rangeStart`
+  // changes from user input.
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart || marketData.length === 0) return;
     const from = Math.floor(new Date(rangeStart + "T00:00:00Z").getTime() / 1000);
     const to = Math.floor(Date.now() / 1000);
-    if (Number.isFinite(from) && from < to) {
+    if (!Number.isFinite(from) || from >= to) return;
+    // Defer to next frame so this runs strictly after series.setData() has
+    // committed its layout pass.
+    const handle = requestAnimationFrame(() => {
       chart.timeScale().setVisibleRange({ from: from as Time, to: to as Time });
-    }
+    });
+    return () => cancelAnimationFrame(handle);
   }, [rangeStart, marketData]);
 
   return (
