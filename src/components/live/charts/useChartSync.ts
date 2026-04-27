@@ -1,62 +1,60 @@
 import { useEffect } from "react";
-import type { IChartApi, Range, Time } from "lightweight-charts";
+import type { IChartApi, LogicalRange } from "lightweight-charts";
 
 /**
- * Two-way bind two charts' visible *time* range so panning/zooming one syncs
- * the other. We sync time (not logical/index) because the two charts may hold
- * very different point counts — a candle chart with hundreds of bars and a
- * signal lane with only a handful of trade points. With logical-index sync,
- * the same index in each chart maps to wildly different times, so a small
- * drag on one chart would jump the other to an unrelated moment.
+ * Pure state machine for two-way logical-range sync between charts.
+ * Extracted so it's testable without React/lightweight-charts.
  *
- * Loop guard: instead of a transient `suppress` flag (which races with async
- * `subscribeVisibleTimeRangeChange` callbacks emitted by lightweight-charts
- * after a `setVisibleRange` call), we cache the last range we propagated and
- * compare incoming events against it. An incoming range that matches the
- * cache is the echo of our own write and is ignored — covering both the
- * synchronous and async event-emission cases.
+ * Why logical (bar index) and not time:
+ *   `setVisibleRange` rounds to bar boundaries, so the echo callback fires
+ *   with a slightly different range than what we set, breaking equality
+ *   checks. Logical ranges are the bar indices themselves — exact in,
+ *   exact out, no rounding. This relies on both charts having the *same
+ *   bars* (same time series); we now ensure that by feeding both the
+ *   identical, parent-filtered marketData plus a synced "current hour
+ *   bucket" placeholder.
  */
+export interface SyncState {
+  lastSync: { from: number; to: number } | null;
+}
+
+const TOLERANCE = 0.001; // bar-index tolerance, generous for float wobble
+
+/** Decide whether an incoming range should be propagated to the partner. */
+export function shouldPropagate(state: SyncState, incoming: { from: number; to: number }): boolean {
+  if (!state.lastSync) return true;
+  return Math.abs(incoming.from - state.lastSync.from) > TOLERANCE
+      || Math.abs(incoming.to - state.lastSync.to) > TOLERANCE;
+}
+
+export function recordSync(state: SyncState, range: { from: number; to: number }): void {
+  state.lastSync = { from: range.from, to: range.to };
+}
+
 export function useChartSync(
   top: IChartApi | null,
   bottom: IChartApi | null,
 ) {
   useEffect(() => {
     if (!top || !bottom) return;
+    const state: SyncState = { lastSync: null };
 
-    let lastSync: { from: number; to: number } | null = null;
-
-    const numericFromTime = (t: Time): number => {
-      if (typeof t === "number") return t;
-      if (typeof t === "string") return Math.floor(new Date(t).getTime() / 1000);
-      // BusinessDay { year, month, day } — rare for our intraday charts
-      return Math.floor(new Date(`${t.year}-${t.month}-${t.day}`).getTime() / 1000);
-    };
-
-    const sameAsLast = (range: Range<Time>): boolean => {
-      if (!lastSync) return false;
-      return Math.abs(numericFromTime(range.from) - lastSync.from) < 0.5
-        && Math.abs(numericFromTime(range.to) - lastSync.to) < 0.5;
-    };
-
-    const propagate = (range: Range<Time> | null, target: IChartApi) => {
+    const propagate = (range: LogicalRange | null, target: IChartApi) => {
       if (!range) return;
-      if (sameAsLast(range)) return;  // echo of our own write — skip
-      lastSync = {
-        from: numericFromTime(range.from),
-        to: numericFromTime(range.to),
-      };
-      target.timeScale().setVisibleRange(range);
+      if (!shouldPropagate(state, range)) return;
+      recordSync(state, range);
+      target.timeScale().setVisibleLogicalRange(range);
     };
 
-    const onTop = (range: Range<Time> | null) => propagate(range, bottom);
-    const onBottom = (range: Range<Time> | null) => propagate(range, top);
+    const onTop = (range: LogicalRange | null) => propagate(range, bottom);
+    const onBottom = (range: LogicalRange | null) => propagate(range, top);
 
-    top.timeScale().subscribeVisibleTimeRangeChange(onTop);
-    bottom.timeScale().subscribeVisibleTimeRangeChange(onBottom);
+    top.timeScale().subscribeVisibleLogicalRangeChange(onTop);
+    bottom.timeScale().subscribeVisibleLogicalRangeChange(onBottom);
 
     return () => {
-      top.timeScale().unsubscribeVisibleTimeRangeChange(onTop);
-      bottom.timeScale().unsubscribeVisibleTimeRangeChange(onBottom);
+      top.timeScale().unsubscribeVisibleLogicalRangeChange(onTop);
+      bottom.timeScale().unsubscribeVisibleLogicalRangeChange(onBottom);
     };
   }, [top, bottom]);
 }
