@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { LiveSession, LiveTrade, MarketData, Preset, TickData } from "../types";
+import type { LiveSession, LiveTrade, MarketData, Preset, SignalEvent, TickData } from "../types";
 import {
   listPresets,
   listSessions,
@@ -11,7 +11,7 @@ import {
   deletePreset as apiDeletePreset,
   subscribeTicks,
 } from "../lib/live";
-import { getMarketData, autoUpdateAllMarkets } from "../lib/api";
+import { getMarketData, autoUpdateAllMarkets, runSimulation } from "../lib/api";
 
 interface LiveTradingState {
   sessions: LiveSession[];
@@ -22,6 +22,9 @@ interface LiveTradingState {
   loading: boolean;
   marketData: MarketData[] | null;
   loadingMarketData: boolean;
+  /// Per-candle signal log derived by replaying a session's preset on the
+  /// visible window. Keyed by session.id.
+  signalsBySession: Record<number, SignalEvent[]>;
 
   refreshAll: () => Promise<void>;
   refreshSessions: () => Promise<void>;
@@ -29,6 +32,7 @@ interface LiveTradingState {
   refreshTrades: (sessionId: number) => Promise<void>;
   loadMarketData: () => Promise<void>;
   loadAllSessionTrades: () => Promise<void>;
+  loadSessionSignals: (sessionId: number, since: string) => Promise<void>;
 
   createSession: (args: Parameters<typeof apiCreateSession>[0]) => Promise<void>;
   startSession: (id: number) => Promise<void>;
@@ -47,6 +51,7 @@ export const useLiveTradingStore = create<LiveTradingState>((set, get) => ({
   loading: false,
   marketData: null,
   loadingMarketData: false,
+  signalsBySession: {},
 
   loadMarketData: async () => {
     if (get().loadingMarketData) return;
@@ -76,6 +81,30 @@ export const useLiveTradingStore = create<LiveTradingState>((set, get) => ({
     const map: Record<number, LiveTrade[]> = {};
     for (const [id, trades] of results) map[id] = trades;
     set({ tradesBySession: map });
+  },
+
+  loadSessionSignals: async (sessionId, since) => {
+    const session = get().sessions.find((s) => s.id === sessionId);
+    if (!session) return;
+    const preset = get().presets.find((p) => p.id === session.preset_id);
+    if (!preset) return;
+    try {
+      const params = JSON.parse(preset.params_json) as Record<string, number>;
+      const today = new Date().toISOString().slice(0, 10);
+      const result = await runSimulation(
+        preset.strategy_key,
+        "ETH",
+        "hour",
+        params,
+        since,
+        today,
+      );
+      set((s) => ({
+        signalsBySession: { ...s.signalsBySession, [sessionId]: result.signal_log ?? [] },
+      }));
+    } catch (e) {
+      console.warn("loadSessionSignals failed", sessionId, e);
+    }
   },
 
   refreshAll: async () => {

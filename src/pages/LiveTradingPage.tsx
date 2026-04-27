@@ -6,7 +6,7 @@ import SessionTable from "../components/live/SessionTable";
 import NewSessionDialog from "../components/live/NewSessionDialog";
 import LiveKpiBar from "../components/live/LiveKpiBar";
 import CandleChart from "../components/live/CandleChart";
-import SignalLaneChart from "../components/live/SignalLaneChart";
+import SignalStripChart from "../components/live/SignalStripChart";
 import { useChartSync } from "../components/live/charts/useChartSync";
 import type { IChartApi } from "lightweight-charts";
 import type { LiveTrade, MarketData } from "../types";
@@ -21,11 +21,11 @@ const defaultRangeStart = (): string => {
 export default function LiveTradingPage() {
   const {
     sessions, presets, ticks,
-    marketData, tradesBySession,
+    marketData, tradesBySession, signalsBySession,
     refreshAll, createSession,
     startSession, stopSession, deleteSession, deletePreset,
     subscribeEvents,
-    loadMarketData, loadAllSessionTrades,
+    loadMarketData, loadAllSessionTrades, loadSessionSignals,
   } = useLiveTradingStore();
   const [showNew, setShowNew] = useState(false);
   const [candleChart, setCandleChart] = useState<IChartApi | null>(null);
@@ -36,6 +36,9 @@ export default function LiveTradingPage() {
   // already filtered by this date so they auto-fit consistently and the
   // useChartSync time-based binding works without surprises.
   const [rangeStart, setRangeStart] = useState<string>(defaultRangeStart);
+
+  // Which session's signal log to render in the strip chart.
+  const [stripSessionId, setStripSessionId] = useState<number | null>(null);
 
   useEffect(() => {
     refreshAll().then(() => {
@@ -54,6 +57,24 @@ export default function LiveTradingPage() {
     if (sessions.length > 0) loadAllSessionTrades();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionIdsKey]);
+
+  // Default the strip's session to the first one we know about, and track it
+  // if the current selection is removed.
+  useEffect(() => {
+    if (sessions.length === 0) {
+      if (stripSessionId !== null) setStripSessionId(null);
+      return;
+    }
+    if (stripSessionId == null || !sessions.find(s => s.id === stripSessionId)) {
+      setStripSessionId(sessions[0].id);
+    }
+  }, [sessionIdsKey, stripSessionId, sessions]);
+
+  // Re-run the strip's signal log when the picked session or window changes.
+  useEffect(() => {
+    if (stripSessionId != null) loadSessionSignals(stripSessionId, rangeStart);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stripSessionId, rangeStart]);
 
   // Derived: market data and trades scoped to the visible window.
   const cutoffMs = useMemo(
@@ -99,10 +120,24 @@ export default function LiveTradingPage() {
               tick={ticks["KRW-ETH"]}
               onChartReady={setCandleChart}
             />
-            <div className="mt-2">
-              <SignalLaneChart
-                sessions={sessions}
-                tradesBySession={visibleTradesBySession}
+            <div className="mt-2 flex items-center justify-between text-xs">
+              <span className="text-zinc-500">Signal strip</span>
+              {sessions.length > 0 && (
+                <select
+                  value={stripSessionId ?? ""}
+                  onChange={(e) => setStripSessionId(Number(e.target.value))}
+                  className="bg-zinc-800 border border-zinc-700 rounded-md px-2 py-1 text-zinc-200"
+                >
+                  {sessions.map((s) => (
+                    <option key={s.id} value={s.id}>{s.label}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+            <div className="mt-1">
+              <SignalStripChart
+                marketData={visibleMarketData}
+                signals={stripSessionId != null ? (signalsBySession[stripSessionId] ?? []) : []}
                 onChartReady={setLaneChart}
               />
             </div>
