@@ -101,6 +101,31 @@ pub async fn run_session_cycle(
         ).map_err(|e| -> BoxErr { e.to_string().into() })?;
     }
 
+    // Open position: SimulationResult.trades only contains *completed* pairs,
+    // so an in-progress buy (last_position=1, hasn't sold yet) wouldn't show
+    // up as a marker on the chart. Persist it as a buy-only paper row, with
+    // its timestamp pulled from the most recent 'buy' transition in
+    // signal_log so it lands on the candle where the entry actually fired.
+    if result.last_position == 1 {
+        let open_buy_ts = result.signal_log.iter().rev()
+            .find(|e| e.signal_type == "buy")
+            .map(|e| e.timestamp.clone());
+        if let Some(buy_ts) = open_buy_ts {
+            let buy_price = result.last_buy_price;
+            let rough_volume = if buy_price > 0.0 {
+                session.initial_capital / buy_price
+            } else {
+                0.0
+            };
+            live_repo::insert_trade(
+                &conn, session.id, &buy_ts, "buy",
+                buy_price, rough_volume,
+                buy_price * rough_volume * fee_rate,
+                "buy", None, None, false,
+            ).map_err(|e| -> BoxErr { e.to_string().into() })?;
+        }
+    }
+
     // 4. Current position snapshot from result.last_*.
     let current_position = if result.last_position == 1 { "holding" } else { "idle" };
     let (cbp, cbv) = if result.last_position == 1 {
