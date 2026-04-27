@@ -3,3 +3,4 @@ pub mod auto_trader;
 pub mod market_updater;
 pub mod session_engine;
 pub mod live_scheduler;
+pub mod tick_broker;

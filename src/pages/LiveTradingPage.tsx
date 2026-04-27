@@ -4,11 +4,12 @@ import { Card, CardContent, CardHeader } from "../components/ui/Card";
 import { Plus, Trash2 } from "lucide-react";
 import SessionTable from "../components/live/SessionTable";
 import NewSessionDialog from "../components/live/NewSessionDialog";
+import LiveKpiBar from "../components/live/LiveKpiBar";
 import { useLiveTradingStore } from "../stores/liveTradingStore";
 
 export default function LiveTradingPage() {
   const {
-    sessions, presets,
+    sessions, presets, ticks,
     refreshAll, createSession,
     startSession, stopSession, deleteSession, deletePreset,
     subscribeEvents,
@@ -24,6 +25,8 @@ export default function LiveTradingPage() {
 
   return (
     <div className="space-y-4 animate-fade-in">
+      <LiveKpiBar tick={ticks["KRW-ETH"]} />
+
       <Card>
         <CardHeader>
           <h3 className="text-sm font-semibold text-zinc-300">
@@ -91,6 +94,7 @@ export default function LiveTradingPage() {
         <CardContent>
           <SessionTable
             sessions={sessions}
+            ticks={ticks}
             onStart={startSession}
             onStop={stopSession}
             onDelete={(id) => {

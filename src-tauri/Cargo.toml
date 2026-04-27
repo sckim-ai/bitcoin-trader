@@ -39,6 +39,9 @@ tower-http = { version = "0.5", features = ["cors"] }
 base64 = "0.22"
 dirs-next = "2.0"
 rayon = "1.10"
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+futures-util = "0.3"
+async-stream = "0.3"
 
 [dev-dependencies]
 approx = "0.5"
