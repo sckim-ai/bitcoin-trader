@@ -6,9 +6,6 @@ import SessionTable from "../components/live/SessionTable";
 import NewSessionDialog from "../components/live/NewSessionDialog";
 import LiveKpiBar from "../components/live/LiveKpiBar";
 import CandleChart from "../components/live/CandleChart";
-import SignalStripChart from "../components/live/SignalStripChart";
-import { useChartSync } from "../components/live/charts/useChartSync";
-import type { IChartApi } from "lightweight-charts";
 import type { LiveTrade, MarketData } from "../types";
 import { useLiveTradingStore } from "../stores/liveTradingStore";
 
@@ -28,13 +25,10 @@ export default function LiveTradingPage() {
     loadMarketData, loadAllSessionTrades, loadSessionSignals,
   } = useLiveTradingStore();
   const [showNew, setShowNew] = useState(false);
-  const [candleChart, setCandleChart] = useState<IChartApi | null>(null);
-  const [laneChart, setLaneChart] = useState<IChartApi | null>(null);
-  useChartSync(candleChart, laneChart);
 
-  // Single source of truth for the chart window. Both charts receive data
-  // already filtered by this date so they auto-fit consistently and the
-  // useChartSync time-based binding works without surprises.
+  // Single source of truth for the chart window. Data is filtered to this
+  // start before rendering so the chart's auto-fit lands on the user's
+  // chosen range.
   const [rangeStart, setRangeStart] = useState<string>(defaultRangeStart);
 
   // Which session's signal log to render in the strip chart.
@@ -113,16 +107,9 @@ export default function LiveTradingPage() {
             </div>
           </CardHeader>
           <CardContent>
-            <CandleChart
-              marketData={visibleMarketData}
-              sessions={sessions}
-              tradesBySession={visibleTradesBySession}
-              tick={ticks["KRW-ETH"]}
-              onChartReady={setCandleChart}
-            />
-            <div className="mt-2 flex items-center justify-between text-xs">
-              <span className="text-zinc-500">Signal strip</span>
-              {sessions.length > 0 && (
+            {sessions.length > 0 && (
+              <div className="mb-2 flex items-center justify-end gap-2 text-xs">
+                <span className="text-zinc-500">Signal session</span>
                 <select
                   value={stripSessionId ?? ""}
                   onChange={(e) => setStripSessionId(Number(e.target.value))}
@@ -132,15 +119,15 @@ export default function LiveTradingPage() {
                     <option key={s.id} value={s.id}>{s.label}</option>
                   ))}
                 </select>
-              )}
-            </div>
-            <div className="mt-1">
-              <SignalStripChart
-                marketData={visibleMarketData}
-                signals={stripSessionId != null ? (signalsBySession[stripSessionId] ?? []) : []}
-                onChartReady={setLaneChart}
-              />
-            </div>
+              </div>
+            )}
+            <CandleChart
+              marketData={visibleMarketData}
+              sessions={sessions}
+              tradesBySession={visibleTradesBySession}
+              tick={ticks["KRW-ETH"]}
+              signals={stripSessionId != null ? (signalsBySession[stripSessionId] ?? []) : []}
+            />
           </CardContent>
         </Card>
       )}

@@ -3,7 +3,7 @@ import {
   createChart, ColorType,
   type IChartApi, type ISeriesApi, type SeriesMarker, type Time, type UTCTimestamp,
 } from "lightweight-charts";
-import type { LiveSession, LiveTrade, MarketData, TickData } from "../../types";
+import type { LiveSession, LiveTrade, MarketData, SignalEvent, TickData } from "../../types";
 import {
   backendToChart, isoToUtcSec, applyTick, initRunning, hourBucketSec,
   type ChartCandle, type RunningCandleState,
@@ -17,9 +17,22 @@ interface Props {
   /** Already filtered by parent to the visible time window. */
   tradesBySession: Record<number, LiveTrade[]>;
   tick: TickData | undefined;
+  /** Per-bar signal log for the strip pane (already filtered upstream). */
+  signals: SignalEvent[];
   /** Called once when the underlying chart is created; null on unmount. */
   onChartReady?: (chart: IChartApi | null) => void;
 }
+
+/** Signal-type → strip colour. Keys match the lowercase strings emitted by
+ *  the engine's `determine_signal_type`. */
+const STRIP_COLORS: Record<string, string> = {
+  ready: "rgba(148, 163, 184, 0.45)",
+  "buy ready": "rgba(134, 239, 172, 0.85)",
+  buy: "rgba(16, 185, 129, 1.0)",
+  hold: "rgba(251, 191, 36, 0.85)",
+  "sell ready": "rgba(251, 146, 60, 0.85)",
+  sell: "rgba(239, 68, 68, 1.0)",
+};
 
 interface OverlayState {
   sma: boolean;
@@ -40,12 +53,13 @@ interface OverlayState {
  * window; lightweight-charts auto-fits to whatever it's given.
  */
 export default function CandleChart({
-  marketData, sessions, tradesBySession, tick, onChartReady,
+  marketData, sessions, tradesBySession, tick, signals, onChartReady,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const stripSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const smaSeriesRef = useRef<ISeriesApi<"Line">[]>([]);
   const bbSeriesRef = useRef<ISeriesApi<"Line">[]>([]);
   const sessionSeriesRef = useRef<Record<number, ISeriesApi<"Line">>>({});
@@ -79,10 +93,17 @@ export default function CandleChart({
     });
     chartRef.current = chart;
 
+    // Pane stack inside ONE chart instance. Right-scale is shared by candles
+    // and indicators; volume + strip get their own hidden scales pinned to
+    // discrete vertical bands at the bottom — no separate chart instance, no
+    // sync to maintain.
     candleSeriesRef.current = chart.addCandlestickSeries({
       upColor: "#10b981", downColor: "#f43f5e",
       borderUpColor: "#10b981", borderDownColor: "#f43f5e",
       wickUpColor: "#10b981", wickDownColor: "#f43f5e",
+    });
+    chart.priceScale("right").applyOptions({
+      scaleMargins: { top: 0.05, bottom: 0.25 }, // candles in top 70%
     });
 
     volumeSeriesRef.current = chart.addHistogramSeries({
@@ -91,7 +112,19 @@ export default function CandleChart({
       priceScaleId: "volume",
     });
     chart.priceScale("volume").applyOptions({
-      scaleMargins: { top: 0.85, bottom: 0 },
+      scaleMargins: { top: 0.75, bottom: 0.12 }, // volume band 75-88%
+      visible: false,
+    });
+
+    stripSeriesRef.current = chart.addHistogramSeries({
+      priceFormat: { type: "volume" },
+      priceScaleId: "strip",
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    chart.priceScale("strip").applyOptions({
+      scaleMargins: { top: 0.9, bottom: 0 }, // signal strip band bottom 10%
+      visible: false,
     });
 
     onChartReady?.(chart);
@@ -102,6 +135,7 @@ export default function CandleChart({
       chartRef.current = null;
       candleSeriesRef.current = null;
       volumeSeriesRef.current = null;
+      stripSeriesRef.current = null;
       smaSeriesRef.current = [];
       bbSeriesRef.current = [];
       sessionSeriesRef.current = {};
@@ -249,15 +283,74 @@ export default function CandleChart({
     });
   }, [tick]);
 
+  // ── 5. Signal strip — colour every candle by current signal type ─────
+  // Lives in the same chart instance so the time axis is shared with the
+  // candle pane by construction. No external sync hook required.
+  useEffect(() => {
+    const series = stripSeriesRef.current;
+    if (!series || marketData.length === 0) {
+      series?.setData([]);
+      return;
+    }
+
+    const byTime = new Map<number, string>();
+    for (const e of signals) byTime.set(isoToUtcSec(e.timestamp), e.signal_type);
+
+    let current = "ready";
+    const data = marketData.map((m) => {
+      const t = isoToUtcSec(m.candle.timestamp);
+      const next = byTime.get(t);
+      if (next) current = next;
+      return {
+        time: t as UTCTimestamp,
+        value: 1,
+        color: STRIP_COLORS[current] ?? STRIP_COLORS.ready,
+      };
+    });
+
+    // Match the candles' running-bucket extension so the strip's right edge
+    // tracks the live candle pixel-perfectly.
+    const nowBucket = hourBucketSec(Date.now());
+    const lastTime = data.length > 0 ? (data[data.length - 1].time as number) : null;
+    if (lastTime != null && nowBucket > lastTime) {
+      data.push({
+        time: nowBucket as UTCTimestamp,
+        value: 1,
+        color: STRIP_COLORS[current] ?? STRIP_COLORS.ready,
+      });
+    }
+
+    series.setData(data);
+  }, [marketData, signals]);
+
   return (
     <div className="space-y-2">
-      <div className="flex items-center gap-2 text-xs">
-        <ToggleChip label="SMA" on={overlay.sma} onChange={v => setOverlay(o => ({ ...o, sma: v }))} />
-        <ToggleChip label="BB" on={overlay.bb} onChange={v => setOverlay(o => ({ ...o, bb: v }))} />
-        <ToggleChip label="Volume" on={overlay.volume} onChange={v => setOverlay(o => ({ ...o, volume: v }))} />
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2 text-xs">
+          <ToggleChip label="SMA" on={overlay.sma} onChange={v => setOverlay(o => ({ ...o, sma: v }))} />
+          <ToggleChip label="BB" on={overlay.bb} onChange={v => setOverlay(o => ({ ...o, bb: v }))} />
+          <ToggleChip label="Volume" on={overlay.volume} onChange={v => setOverlay(o => ({ ...o, volume: v }))} />
+        </div>
+        <div className="flex items-center gap-3 text-[10px] text-zinc-400 flex-wrap">
+          <Legend label="Buy" color={STRIP_COLORS.buy} />
+          <Legend label="Buy Ready" color={STRIP_COLORS["buy ready"]} />
+          <Legend label="Hold" color={STRIP_COLORS.hold} />
+          <Legend label="Sell Ready" color={STRIP_COLORS["sell ready"]} />
+          <Legend label="Sell" color={STRIP_COLORS.sell} />
+          <Legend label="Ready" color={STRIP_COLORS.ready} />
+        </div>
       </div>
-      <div ref={containerRef} className="w-full h-[420px] bg-[#0c0c0f] border border-[#1e1e26] rounded-xl" />
+      <div ref={containerRef} className="w-full h-[480px] bg-[#0c0c0f] border border-[#1e1e26] rounded-xl" />
     </div>
+  );
+}
+
+function Legend({ label, color }: { label: string; color: string }) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span className="inline-block w-3 h-3 rounded-sm" style={{ background: color }} />
+      <span>{label}</span>
+    </span>
   );
 }
 
