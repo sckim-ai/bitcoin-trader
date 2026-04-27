@@ -115,11 +115,14 @@ async fn connect_and_stream(
     let (mut write, mut read) = ws_stream.split();
 
     // Subscribe payload. Upbit expects an array of objects.
+    // We rely on the DEFAULT format (full field names like `trade_price`,
+    // `signed_change_rate`, `acc_trade_volume_24h`); do NOT send SIMPLE format
+    // because it abbreviates field names (`tp`, `scr`, `atv24h`) which our
+    // parser doesn't recognise.
     let codes: Vec<&str> = markets.iter().map(|s| s.as_str()).collect();
     let sub = serde_json::json!([
         {"ticket": "bt-live"},
-        {"type": "ticker", "codes": codes},
-        {"format": "SIMPLE"}
+        {"type": "ticker", "codes": codes}
     ]);
     write.send(Message::Text(sub.to_string())).await?;
 
