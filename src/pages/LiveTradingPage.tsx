@@ -5,27 +5,71 @@ import { Plus, Trash2 } from "lucide-react";
 import SessionTable from "../components/live/SessionTable";
 import NewSessionDialog from "../components/live/NewSessionDialog";
 import LiveKpiBar from "../components/live/LiveKpiBar";
+import CandleChart from "../components/live/CandleChart";
+import SignalLaneChart from "../components/live/SignalLaneChart";
+import { useChartSync } from "../components/live/charts/useChartSync";
+import type { IChartApi } from "lightweight-charts";
 import { useLiveTradingStore } from "../stores/liveTradingStore";
 
 export default function LiveTradingPage() {
   const {
     sessions, presets, ticks,
+    marketData, tradesBySession,
     refreshAll, createSession,
     startSession, stopSession, deleteSession, deletePreset,
     subscribeEvents,
+    loadMarketData, loadAllSessionTrades,
   } = useLiveTradingStore();
   const [showNew, setShowNew] = useState(false);
+  const [candleChart, setCandleChart] = useState<IChartApi | null>(null);
+  const [laneChart, setLaneChart] = useState<IChartApi | null>(null);
+  useChartSync(candleChart, laneChart);
 
   useEffect(() => {
-    refreshAll();
+    refreshAll().then(() => {
+      loadMarketData();
+      loadAllSessionTrades();
+    });
     let unlisten: (() => void) | null = null;
     subscribeEvents().then((fn) => { unlisten = fn; });
     return () => { if (unlisten) unlisten(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Refresh per-session trades whenever session list changes (id-set proxy).
+  const sessionIdsKey = sessions.map(s => s.id).sort((a, b) => a - b).join(",");
+  useEffect(() => {
+    if (sessions.length > 0) loadAllSessionTrades();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionIdsKey]);
 
   return (
     <div className="space-y-4 animate-fade-in">
       <LiveKpiBar tick={ticks["KRW-ETH"]} />
+
+      {marketData && marketData.length > 0 && (
+        <Card>
+          <CardHeader>
+            <h3 className="text-sm font-semibold text-zinc-300">KRW-ETH (1h)</h3>
+          </CardHeader>
+          <CardContent>
+            <CandleChart
+              marketData={marketData}
+              sessions={sessions}
+              tradesBySession={tradesBySession}
+              tick={ticks["KRW-ETH"]}
+              onChartReady={setCandleChart}
+            />
+            <div className="mt-2">
+              <SignalLaneChart
+                sessions={sessions}
+                tradesBySession={tradesBySession}
+                onChartReady={setLaneChart}
+              />
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>
