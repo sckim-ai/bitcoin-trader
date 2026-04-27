@@ -45,7 +45,12 @@ export default function SignalStripChart({ marketData, signals, onChartReady }: 
         vertLines: { color: "transparent" },
         horzLines: { color: "transparent" },
       },
-      timeScale: { borderColor: "#1e1e26", timeVisible: true, secondsVisible: false },
+      timeScale: {
+        borderColor: "#1e1e26", timeVisible: true, secondsVisible: false,
+        // Same minBarSpacing as CandleChart so wheel-zoom hits the same
+        // hard floor in both charts and useChartSync stays consistent.
+        minBarSpacing: 0.5,
+      },
       rightPriceScale: { visible: false },
       leftPriceScale: { visible: false },
       // Drag = pan only; never let axis-region drags trigger a zoom — that

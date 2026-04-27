@@ -5,7 +5,7 @@ import {
 } from "lightweight-charts";
 import type { LiveSession, LiveTrade, MarketData, TickData } from "../../types";
 import {
-  backendToChart, isoToUtcSec, applyTick, initRunning,
+  backendToChart, isoToUtcSec, applyTick, initRunning, hourBucketSec,
   type ChartCandle, type RunningCandleState,
 } from "./charts/runningCandle";
 import { colorFor } from "./charts/sessionPalette";
@@ -65,7 +65,12 @@ export default function CandleChart({
         vertLines: { color: "#1e1e26" },
         horzLines: { color: "#1e1e26" },
       },
-      timeScale: { borderColor: "#1e1e26", timeVisible: true, secondsVisible: false },
+      timeScale: {
+        borderColor: "#1e1e26", timeVisible: true, secondsVisible: false,
+        // Pin a small floor so wheel-zoom-out has the same hard limit as the
+        // signal strip chart (both charts identical ⇒ sync stays in step).
+        minBarSpacing: 0.5,
+      },
       rightPriceScale: { borderColor: "#1e1e26" },
       // Drag the chart body to pan only; no axis-drag scaling. Wheel and
       // pinch still zoom for power users.
@@ -113,6 +118,21 @@ export default function CandleChart({
     if (!chart || !candleSeries || !volumeSeries || marketData.length === 0) return;
 
     const chartCandles: ChartCandle[] = backendToChart(marketData.map(m => m.candle));
+    // Always include a "current hour bucket" placeholder so the candle
+    // chart's right edge tracks the same time as SignalStripChart even
+    // before the first tick arrives. Subsequent ticks update this same
+    // bucket via applyTick().
+    const nowBucket = hourBucketSec(Date.now());
+    const lastBackend = chartCandles[chartCandles.length - 1];
+    if (lastBackend && nowBucket > lastBackend.time) {
+      chartCandles.push({
+        time: nowBucket,
+        open: lastBackend.close,
+        high: lastBackend.close,
+        low: lastBackend.close,
+        close: lastBackend.close,
+      });
+    }
     candleSeries.setData(chartCandles.map(c => ({
       time: c.time as UTCTimestamp, open: c.open, high: c.high, low: c.low, close: c.close,
     })));
