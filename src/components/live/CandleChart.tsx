@@ -308,7 +308,18 @@ export default function CandleChart({
     const byTime = new Map<number, string>();
     for (const e of signals) byTime.set(isoToUtcSec(e.timestamp), e.signal_type);
 
+    // signal_log only records signal-TYPE transitions. To paint the visible
+    // window correctly we must carry forward the strategy's state from the
+    // last transition that happened BEFORE the window starts — otherwise
+    // long stretches that began with e.g. 'hold' upstream show as 'ready'.
+    const visibleStartTime = isoToUtcSec(marketData[0].candle.timestamp);
     let current = "ready";
+    for (const e of signals) {
+      const ts = isoToUtcSec(e.timestamp);
+      if (ts <= visibleStartTime) current = e.signal_type;
+      else break; // signals are chronological; later events handled below
+    }
+
     const data = marketData.map((m) => {
       const t = isoToUtcSec(m.candle.timestamp);
       const next = byTime.get(t);
