@@ -81,14 +81,19 @@ export default function CandleChart({
       },
       timeScale: {
         borderColor: "#1e1e26", timeVisible: true, secondsVisible: false,
-        // Pin a small floor so wheel-zoom-out has the same hard limit as the
-        // signal strip chart (both charts identical ⇒ sync stays in step).
         minBarSpacing: 0.5,
       },
       rightPriceScale: { borderColor: "#1e1e26" },
-      // Drag the chart body to pan only; no axis-drag scaling. Wheel and
-      // pinch still zoom for power users.
       handleScale: { axisPressedMouseMove: false, axisDoubleClickReset: false, mouseWheel: true, pinch: true },
+      // Override the default Korean-locale crosshair label "21 4월 '26 01:00"
+      // with a clean ISO-style string — works regardless of browser locale.
+      localization: {
+        timeFormatter: (t: number) => {
+          const d = new Date(t * 1000);
+          const pad = (n: number) => String(n).padStart(2, "0");
+          return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        },
+      },
       autoSize: true,
     });
     chartRef.current = chart;
@@ -249,7 +254,12 @@ export default function CandleChart({
         position: t.side === "buy" ? "belowBar" : "aboveBar",
         color,
         shape: t.side === "buy" ? "arrowUp" : "arrowDown",
-        text: t.is_real ? `${session.label}!` : session.label,
+        // No text label — long labels (e.g. "Short_156%") get drawn next to
+        // the arrow which lightweight-charts shifts horizontally to fit,
+        // making the marker appear visually offset from the candle/strip
+        // even though the underlying time is exact. Color (per-session)
+        // and an optional "R" badge for real-trade rows are enough.
+        text: t.is_real ? "R" : undefined,
         size: t.is_real ? 2 : 1,
       }));
       if (markers.length > 0) {
