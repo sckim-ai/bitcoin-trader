@@ -167,6 +167,31 @@ pub fn delete_session(conn: &Connection, id: i64) -> Result<usize> {
     conn.execute("DELETE FROM live_sessions WHERE id = ?1", [id])
 }
 
+/// Save the latest cycle's signal_log JSON. Overwrites the previous each
+/// cycle so reads always see the freshest mapping.
+pub fn update_session_signal_log(
+    conn: &Connection,
+    id: i64,
+    signal_log_json: &str,
+) -> Result<usize> {
+    conn.execute(
+        "UPDATE live_sessions SET signal_log_json = ?1 WHERE id = ?2",
+        params![signal_log_json, id],
+    )
+}
+
+/// Returns the persisted signal_log JSON for a session. None when the column
+/// is NULL (session has never run a cycle).
+pub fn get_session_signal_log(conn: &Connection, id: i64) -> Result<Option<String>> {
+    conn.query_row(
+        "SELECT signal_log_json FROM live_sessions WHERE id = ?1",
+        [id],
+        |row| row.get::<_, Option<String>>(0),
+    )
+    .optional()
+    .map(|opt| opt.flatten())
+}
+
 fn row_to_session(row: &rusqlite::Row) -> Result<LiveSession> {
     Ok(LiveSession {
         id: row.get(0)?,
@@ -287,6 +312,8 @@ mod tests {
         conn.execute_batch(s6).unwrap();
         let s7 = include_str!("../../migrations/007_preset_context.sql");
         conn.execute_batch(s7).unwrap();
+        let s8 = include_str!("../../migrations/008_session_signal_log.sql");
+        conn.execute_batch(s8).unwrap();
         conn
     }
 

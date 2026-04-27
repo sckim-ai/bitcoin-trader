@@ -12,6 +12,7 @@ fn setup_db() -> Connection {
     conn.execute_batch(include_str!("../migrations/002_users.sql")).unwrap();
     conn.execute_batch(include_str!("../migrations/006_live_trading.sql")).unwrap();
     conn.execute_batch(include_str!("../migrations/007_preset_context.sql")).unwrap();
+    conn.execute_batch(include_str!("../migrations/008_session_signal_log.sql")).unwrap();
     conn
 }
 

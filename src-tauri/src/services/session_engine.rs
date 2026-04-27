@@ -105,8 +105,13 @@ pub async fn run_session_cycle(
     } else {
         (None, None)
     };
-    let equity = session.initial_capital
-        * (1.0 + result.fee_adjusted_return / 100.0);
+    // Equity = initial × ∏(1 + pnl_pct − 2·fee) over closed trades.
+    // 단순화: bar 기반 누적 폐기 → trade 기반. holding 중 미실현은 프런트엔드
+    // (deriveSessionPnl)가 tick으로 처리하므로 이중 계상 없음.
+    let fee = params.v3_fee_rate;
+    let equity = result.trades.iter().fold(session.initial_capital, |acc, t| {
+        acc * (1.0 + t.pnl_pct - 2.0 * fee)
+    });
 
     // 5. Update session + equity snapshot.
     let last_candle_ts = data.last()
@@ -117,6 +122,13 @@ pub async fn run_session_cycle(
         current_position, cbp, cbv, equity,
     ).map_err(|e| -> BoxErr { e.to_string().into() })?;
     live_repo::upsert_equity(&conn, session.id, &last_candle_ts, equity, current_position)
+        .map_err(|e| -> BoxErr { e.to_string().into() })?;
+
+    // Persist the same simulation's signal_log so the frontend chart strip
+    // reads the canonical per-candle signal sequence — guaranteed to align
+    // with the trades inserted above (both come from `result`).
+    let log_json = serde_json::to_string(&result.signal_log).unwrap_or_else(|_| "[]".into());
+    live_repo::update_session_signal_log(&conn, session.id, &log_json)
         .map_err(|e| -> BoxErr { e.to_string().into() })?;
 
     Ok(SessionCycleOutput {
@@ -140,6 +152,7 @@ mod tests {
         conn.execute_batch(include_str!("../../migrations/002_users.sql")).unwrap();
         conn.execute_batch(include_str!("../../migrations/006_live_trading.sql")).unwrap();
         conn.execute_batch(include_str!("../../migrations/007_preset_context.sql")).unwrap();
+        conn.execute_batch(include_str!("../../migrations/008_session_signal_log.sql")).unwrap();
         conn
     }
 

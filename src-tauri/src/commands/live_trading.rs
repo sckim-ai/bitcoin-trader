@@ -227,3 +227,18 @@ pub fn list_session_trades(session_id: i64, state: State<'_, AppState>) -> Resul
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     live_repo::list_trades(&conn, session_id).map_err(|e| e.to_string())
 }
+
+/// Returns the per-candle signal_log persisted by the most recent
+/// `session_engine` cycle. Empty array if the session has not cycled yet.
+#[tauri::command]
+pub fn get_session_signal_log(
+    session_id: i64,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let json = live_repo::get_session_signal_log(&conn, session_id).map_err(|e| e.to_string())?;
+    match json {
+        Some(s) if !s.is_empty() => serde_json::from_str(&s).map_err(|e| e.to_string()),
+        _ => Ok(serde_json::Value::Array(vec![])),
+    }
+}

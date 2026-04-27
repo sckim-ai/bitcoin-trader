@@ -151,6 +151,7 @@ mod app {
                 live_trading::stop_session,
                 live_trading::delete_session,
                 live_trading::list_session_trades,
+                live_trading::get_session_signal_log,
             ])
             .run(tauri::generate_context!())
             .expect("error while running tauri application");

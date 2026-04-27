@@ -4,6 +4,7 @@ import {
   listPresets,
   listSessions,
   listSessionTrades,
+  getSessionSignalLog,
   createSession as apiCreateSession,
   startSession as apiStart,
   stopSession as apiStop,
@@ -11,7 +12,7 @@ import {
   deletePreset as apiDeletePreset,
   subscribeTicks,
 } from "../lib/live";
-import { getMarketData, autoUpdateAllMarkets, runSimulation } from "../lib/api";
+import { getMarketData, autoUpdateAllMarkets } from "../lib/api";
 
 interface LiveTradingState {
   sessions: LiveSession[];
@@ -84,28 +85,13 @@ export const useLiveTradingStore = create<LiveTradingState>((set, get) => ({
   },
 
   loadSessionSignals: async (sessionId, _since) => {
-    const session = get().sessions.find((s) => s.id === sessionId);
-    if (!session) return;
-    const preset = get().presets.find((p) => p.id === session.preset_id);
-    if (!preset) return;
+    // Read the signal_log persisted by session_engine on its last cycle.
+    // Same simulation that produced the trades in live_trades — guaranteed
+    // alignment, no frontend-side re-simulation, no data-window mismatch.
     try {
-      const params = JSON.parse(preset.params_json) as Record<string, number>;
-      // Pass null for since/until → backend uses every candle currently in
-      // the DB. That gives the strategy the same indicator warmup that
-      // session_engine had on its last cycle (it also reads from the same
-      // local DB), so trade-marker timestamps in live_trades match the
-      // signal_log timestamps returned here. Filtering with preset.since_ts
-      // earlier could over-shrink the window if the DB history is sparse.
-      const result = await runSimulation(
-        preset.strategy_key,
-        "ETH",
-        "hour",
-        params,
-        null,
-        null,
-      );
+      const signals = await getSessionSignalLog(sessionId);
       set((s) => ({
-        signalsBySession: { ...s.signalsBySession, [sessionId]: result.signal_log ?? [] },
+        signalsBySession: { ...s.signalsBySession, [sessionId]: signals },
       }));
     } catch (e) {
       console.error("loadSessionSignals failed", sessionId, e);
@@ -167,7 +153,13 @@ export const useLiveTradingStore = create<LiveTradingState>((set, get) => ({
     // Tauri session events (same as before)
     if ("__TAURI_INTERNALS__" in window) {
       const { listen } = await import("@tauri-apps/api/event");
-      const u1 = await listen("session:update", () => { get().refreshSessions(); });
+      const u1 = await listen<{ session_id?: number }>("session:update", (e) => {
+        get().refreshSessions();
+        // After the engine cycle persists a fresh signal_log, refresh any
+        // session whose strip is currently being viewed.
+        const sid = e.payload?.session_id;
+        if (sid != null) get().loadSessionSignals(sid, "");
+      });
       const u2 = await listen<{ session_id: number }>("session:log", (e) => {
         console.debug("session:log", e.payload);
       });

@@ -2,6 +2,7 @@ import type {
   Preset,
   LiveSession,
   LiveTrade,
+  SignalEvent,
   CreateSessionArgs,
   SavePresetArgs,
   TickData,
@@ -37,6 +38,10 @@ export const deleteSession = (id: number): Promise<void> =>
   invoke("delete_session", { id });
 export const listSessionTrades = (sessionId: number): Promise<LiveTrade[]> =>
   invoke("list_session_trades", { sessionId });
+/// Persisted per-candle signal_log for the session — written by session_engine
+/// each cycle so it always matches the trades in live_trades.
+export const getSessionSignalLog = (sessionId: number): Promise<SignalEvent[]> =>
+  invoke("get_session_signal_log", { sessionId });
 
 // ─── Market Ticks ───
 /// Subscribe to market ticks. Returns an unsubscribe function.

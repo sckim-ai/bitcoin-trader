@@ -46,6 +46,13 @@ pub fn initialize(db_path: &Path) -> Result<Connection> {
             return Err(e);
         }
     }
+    let schema_v8 = include_str!("../../migrations/008_session_signal_log.sql");
+    if let Err(e) = conn.execute_batch(schema_v8) {
+        let msg = e.to_string();
+        if !msg.contains("duplicate column") && !msg.contains("already exists") {
+            return Err(e);
+        }
+    }
     // Backfill best_return cache for pre-migration runs so the listing
     // query works uniformly. Idempotent: only touches NULL rows.
     conn.execute(
