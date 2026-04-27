@@ -184,11 +184,10 @@ pub async fn start_session(
                 return;
             }
         };
-        let client = crate::services::live_scheduler::create_public_client();
         let registry = crate::strategies::StrategyRegistry::new();
 
         match crate::services::session_engine::run_session_cycle(
-            &conn, &client, &session, &preset, &registry,
+            &conn, &session, &preset, &registry,
         ).await {
             Ok(out) => { let _ = handle.emit("session:update", &out); }
             Err(e) => {
@@ -272,10 +271,9 @@ pub async fn refresh_session_cycle(
     let conn = crate::db::schema::initialize(&crate::db::paths::local_db_path())
         .map_err(|e| format!("refresh-cycle DB init: {}", e))?;
     let db = std::sync::Arc::new(std::sync::Mutex::new(conn));
-    let client = crate::services::live_scheduler::create_public_client();
     let registry = crate::strategies::StrategyRegistry::new();
 
-    crate::services::session_engine::run_session_cycle(&db, &client, &session, &preset, &registry)
+    crate::services::session_engine::run_session_cycle(&db, &session, &preset, &registry)
         .await
         .map_err(|e| format!("refresh cycle: {}", e))?;
 

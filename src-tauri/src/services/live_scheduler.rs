@@ -31,7 +31,8 @@ pub async fn run_loop(
     use tauri::Emitter;
 
     let registry = StrategyRegistry::new();
-    let client = create_public_client();
+    // run_session_cycle now reads candles directly from DB; no Upbit client
+    // needed here. (`create_public_client` is still pub for other callers.)
 
     loop {
         if cancel.load(Ordering::Relaxed) { break; }
@@ -65,7 +66,7 @@ pub async fn run_loop(
                 }
             };
 
-            match session_engine::run_session_cycle(&db, &client, &session, &preset, &registry).await {
+            match session_engine::run_session_cycle(&db, &session, &preset, &registry).await {
                 Ok(out) => {
                     let _ = app_handle.emit("session:update", &out);
                 }

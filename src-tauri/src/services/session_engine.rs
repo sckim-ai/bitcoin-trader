@@ -1,8 +1,7 @@
-use crate::api::upbit::UpbitClient;
+use crate::core::day_psy_store;
 use crate::db::live_repo;
 use crate::models::live::{LiveSession, Preset};
 use crate::models::trading::TradingParameters;
-use crate::services::auto_trader::fetch_and_prepare_data;
 use crate::strategies::StrategyRegistry;
 use chrono::Utc;
 use rusqlite::Connection;
@@ -20,19 +19,28 @@ pub struct SessionCycleOutput {
     pub current_equity: f64,
 }
 
-/// Run one cycle for a single session. Idempotent — re-running on the same
-/// data set produces no new DB rows (diff-based insert).
+/// Run one cycle for a single session. Loads the FULL history from local DB
+/// — every hourly candle from `session.start_ts` (= preset.since_ts) to the
+/// most recent persisted bar — and replays the entire strategy. The output
+/// (trades + signal_log) is byte-identical to what the Simulation page would
+/// produce for the same span, so DB-stored trades and the chart strip stay
+/// aligned by construction. Live freshness comes from market_updater /
+/// auto_update_all writing the latest bar to DB; the cycle just reads.
 pub async fn run_session_cycle(
     db: &Arc<Mutex<Connection>>,
-    client: &UpbitClient,
     session: &LiveSession,
     preset: &Preset,
     registry: &StrategyRegistry,
 ) -> Result<SessionCycleOutput, BoxErr> {
-    // 1. Fetch candles covering session.start_ts ~ now.
-    //    Phase 1 shortcut: pull last 500 hourly bars from Upbit + DB-cached
-    //    day-psy; trim to session.start_ts at the strategy call site.
-    let data = fetch_and_prepare_data(client, db, &session.market, 500).await?;
+    // DB short market form ('ETH', 'BTC') vs API form ('KRW-ETH'). Live
+    // sessions store the API form; load_market_data wants the short one.
+    let db_market = session.market.split('-').nth(1).unwrap_or(&session.market);
+
+    let data: Vec<_> = {
+        let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
+        day_psy_store::load_market_data(&conn, db_market, Some(&session.start_ts), None)
+            .map_err(|e| -> BoxErr { e.to_string().into() })?
+    };
     let session_start = chrono::DateTime::parse_from_rfc3339(&session.start_ts)
         .map_err(|e| -> BoxErr { e.to_string().into() })?
         .with_timezone(&Utc);
