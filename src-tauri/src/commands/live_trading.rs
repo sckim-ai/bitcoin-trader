@@ -242,3 +242,50 @@ pub fn get_session_signal_log(
         _ => Ok(serde_json::Value::Array(vec![])),
     }
 }
+
+/// Run a fresh `session_engine` cycle for the given session and return its
+/// signal_log. This is the on-demand path used by the chart strip when the
+/// page mounts or the user picks a different session — it forces a current
+/// simulation pass, persists trades/equity/signal_log, and returns the
+/// signals so the strip can render immediately. Reuses the exact same
+/// execution path as the hourly scheduler, so trade-marker timestamps and
+/// signal_log timestamps stay byte-identical.
+#[tauri::command]
+pub async fn refresh_session_cycle(
+    session_id: i64,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    // Snapshot the inputs the cycle needs without holding the AppState lock
+    // across the await (Mutex<Connection> is !Send).
+    let (session, preset) = {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        let s = live_repo::get_session(&conn, session_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("session {} not found", session_id))?;
+        let p = live_repo::get_preset(&conn, s.preset_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("preset {} not found", s.preset_id))?;
+        (s, p)
+    };
+
+    // Dedicated DB connection for the cycle (matches start_session pattern).
+    let conn = crate::db::schema::initialize(&crate::db::paths::local_db_path())
+        .map_err(|e| format!("refresh-cycle DB init: {}", e))?;
+    let db = std::sync::Arc::new(std::sync::Mutex::new(conn));
+    let client = crate::services::live_scheduler::create_public_client();
+    let registry = crate::strategies::StrategyRegistry::new();
+
+    crate::services::session_engine::run_session_cycle(&db, &client, &session, &preset, &registry)
+        .await
+        .map_err(|e| format!("refresh cycle: {}", e))?;
+
+    // Read back the freshly persisted signal_log from the AppState DB.
+    let json = {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        live_repo::get_session_signal_log(&conn, session_id).map_err(|e| e.to_string())?
+    };
+    match json {
+        Some(s) if !s.is_empty() => serde_json::from_str(&s).map_err(|e| e.to_string()),
+        _ => Ok(serde_json::Value::Array(vec![])),
+    }
+}

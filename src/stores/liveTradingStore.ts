@@ -5,6 +5,7 @@ import {
   listSessions,
   listSessionTrades,
   getSessionSignalLog,
+  refreshSessionCycle,
   createSession as apiCreateSession,
   startSession as apiStart,
   stopSession as apiStop,
@@ -85,16 +86,36 @@ export const useLiveTradingStore = create<LiveTradingState>((set, get) => ({
   },
 
   loadSessionSignals: async (sessionId, _since) => {
-    // Read the signal_log persisted by session_engine on its last cycle.
-    // Same simulation that produced the trades in live_trades — guaranteed
-    // alignment, no frontend-side re-simulation, no data-window mismatch.
+    // Two-step strategy:
+    //   (1) Read the persisted signal_log immediately so the strip can
+    //       paint without waiting for a backend cycle. Empty for fresh
+    //       sessions that have never run a cycle.
+    //   (2) Fire a refresh_session_cycle in the background — it re-runs
+    //       run_session_cycle, persists trades + signal_log + equity,
+    //       and returns the freshly produced signals. The strip updates
+    //       a moment later with the current-state signals.
+    // This makes the strip "always show the latest" without forcing the
+    // user to wait on the on-demand cycle for the first paint.
     try {
-      const signals = await getSessionSignalLog(sessionId);
-      set((s) => ({
-        signalsBySession: { ...s.signalsBySession, [sessionId]: signals },
-      }));
+      const cached = await getSessionSignalLog(sessionId);
+      if (cached.length > 0) {
+        set((s) => ({
+          signalsBySession: { ...s.signalsBySession, [sessionId]: cached },
+        }));
+      }
     } catch (e) {
-      console.error("loadSessionSignals failed", sessionId, e);
+      console.warn("loadSessionSignals (cached) failed", sessionId, e);
+    }
+    try {
+      const fresh = await refreshSessionCycle(sessionId);
+      set((s) => ({
+        signalsBySession: { ...s.signalsBySession, [sessionId]: fresh },
+      }));
+      // Cycle also writes new trades — pull them into the store so the
+      // candle markers refresh in the same paint.
+      await get().loadAllSessionTrades();
+    } catch (e) {
+      console.error("loadSessionSignals (refresh) failed", sessionId, e);
     }
   },
 
