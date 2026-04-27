@@ -11,8 +11,10 @@ import {
 import { colorFor } from "./charts/sessionPalette";
 
 interface Props {
+  /** Already filtered by parent to the visible time window. */
   marketData: MarketData[];
   sessions: LiveSession[];
+  /** Already filtered by parent to the visible time window. */
   tradesBySession: Record<number, LiveTrade[]>;
   tick: TickData | undefined;
   /** Called once when the underlying chart is created; null on unmount. */
@@ -26,14 +28,16 @@ interface OverlayState {
 }
 
 /**
- * Two changes are mutating the chart over time:
- *   1. Static: candles + indicators + markers are set once per render of
- *      `marketData` / `sessions` / `tradesBySession`.
- *   2. Live: every tick mutates the running candle via series.update().
+ * Pure renderer: parent controls what data lands here. Internal effects only:
+ *   - 1: chart bootstrap (once)
+ *   - 2: candles + indicators (when marketData changes)
+ *   - 2b: session markers — pinned to a hidden price scale so they don't
+ *         distort the candle Y axis (when sessions/trades change)
+ *   - 3: overlay visibility toggles
+ *   - 4: tick → running candle
  *
- * We deliberately do NOT pass `tick` through the static effect's deps —
- * otherwise every tick would tear down and rebuild every series, killing
- * performance and causing visual jitter.
+ * No setVisibleRange logic here. Parent filters the data to the user's chosen
+ * window; lightweight-charts auto-fits to whatever it's given.
  */
 export default function CandleChart({
   marketData, sessions, tradesBySession, tick, onChartReady,
@@ -48,14 +52,6 @@ export default function CandleChart({
   const runningRef = useRef<RunningCandleState>({ current: null });
 
   const [overlay, setOverlay] = useState<OverlayState>({ sma: true, bb: false, volume: true });
-
-  // User picks the start date; the right edge always tracks "now" so the
-  // running candle stays in view. Default = 7 days ago.
-  const [rangeStart, setRangeStart] = useState<string>(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 7);
-    return d.toISOString().slice(0, 10);
-  });
 
   // ── 1. Initialise chart instance once ────────────────────────────────
   useEffect(() => {
@@ -103,26 +99,22 @@ export default function CandleChart({
       sessionSeriesRef.current = {};
       runningRef.current = { current: null };
     };
-    // onChartReady deliberately omitted — referencing a fresh callback on
-    // every parent render would re-initialise the chart, which we never want.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── 2. Static data: candles, volume, indicators, session markers ─────
+  // ── 2. Candles + volume + indicators ─────────────────────────────────
   useEffect(() => {
     const chart = chartRef.current;
     const candleSeries = candleSeriesRef.current;
     const volumeSeries = volumeSeriesRef.current;
     if (!chart || !candleSeries || !volumeSeries || marketData.length === 0) return;
 
-    // Candles
     const chartCandles: ChartCandle[] = backendToChart(marketData.map(m => m.candle));
     candleSeries.setData(chartCandles.map(c => ({
       time: c.time as UTCTimestamp, open: c.open, high: c.high, low: c.low, close: c.close,
     })));
     runningRef.current = initRunning(chartCandles);
 
-    // Volume — green when close >= open, red otherwise
     volumeSeries.setData(marketData.map(m => ({
       time: isoToUtcSec(m.candle.timestamp) as UTCTimestamp,
       value: m.candle.volume,
@@ -130,7 +122,6 @@ export default function CandleChart({
         ? "rgba(16,185,129,0.4)" : "rgba(244,63,94,0.4)",
     })));
 
-    // SMA overlays — dispose previous, recreate
     smaSeriesRef.current.forEach(s => chart.removeSeries(s));
     smaSeriesRef.current = [];
     const smaConfigs: Array<[keyof MarketData["indicators"], string]> = [
@@ -147,7 +138,6 @@ export default function CandleChart({
       smaSeriesRef.current.push(s);
     }
 
-    // Bollinger Bands
     bbSeriesRef.current.forEach(s => chart.removeSeries(s));
     bbSeriesRef.current = [];
     const bbConfigs: Array<[keyof MarketData["indicators"], string]> = [
@@ -165,13 +155,15 @@ export default function CandleChart({
         })));
       bbSeriesRef.current.push(s);
     }
-
   }, [marketData]);
 
-  // ── 2b. Session markers (only trades — does NOT touch candleSeries) ───
-  // Splitting this out from candle/indicator updates means session changes
-  // don't re-call setData on the main series, which would otherwise reset
-  // the user's visible window back to the full data range.
+  // ── 2b. Session markers ──────────────────────────────────────────────
+  // Markers attach via a transparent line series. Each session series rides
+  // on its own hidden price scale (`priceScaleId: 'markers-<id>'`) so the
+  // marker line value (which we set to the trade price for natural placement)
+  // does NOT participate in the main candle Y-axis auto-fit. Without this,
+  // an early-session value of 0 forced the chart to include 0..5M, squashing
+  // recent action into a sliver.
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
@@ -181,12 +173,16 @@ export default function CandleChart({
 
     const sessionIds = sessions.map(s => s.id).slice().sort((a, b) => a - b);
     for (const session of sessions) {
+      const scaleId = `markers-${session.id}`;
       const series = chart.addLineSeries({
         color: "rgba(0,0,0,0)",
         priceLineVisible: false,
         lastValueVisible: false,
         crosshairMarkerVisible: false,
+        priceScaleId: scaleId,
       });
+      // Hide this overlay scale so it doesn't render axis labels.
+      chart.priceScale(scaleId).applyOptions({ visible: false });
       sessionSeriesRef.current[session.id] = series;
 
       const trades = tradesBySession[session.id] ?? [];
@@ -200,7 +196,12 @@ export default function CandleChart({
         size: t.is_real ? 2 : 1,
       }));
       if (markers.length > 0) {
-        series.setData(markers.map(m => ({ time: m.time, value: 0 })));
+        // Anchor data uses the trade price so the marker's vertical
+        // position (belowBar / aboveBar) is computed near the candle.
+        series.setData(trades.map(t => ({
+          time: isoToUtcSec(t.ts) as UTCTimestamp,
+          value: t.price,
+        })));
         series.setMarkers(markers);
       }
     }
@@ -225,45 +226,12 @@ export default function CandleChart({
     });
   }, [tick]);
 
-  // ── 5. Apply user-selected visible window ────────────────────────────
-  // Right edge always tracks "now" so the running candle stays in view.
-  // Sister chart (SignalLaneChart) follows via useChartSync subscription.
-  // We must re-apply after `setData` runs (effect 2) — otherwise lightweight-
-  // charts' default fit-content can override our scroll. The dependency on
-  // `marketData` covers initial mount; we also re-apply whenever `rangeStart`
-  // changes from user input.
-  useEffect(() => {
-    const chart = chartRef.current;
-    if (!chart || marketData.length === 0) return;
-    const from = Math.floor(new Date(rangeStart + "T00:00:00Z").getTime() / 1000);
-    const to = Math.floor(Date.now() / 1000);
-    if (!Number.isFinite(from) || from >= to) return;
-    // Defer to next frame so this runs strictly after series.setData() has
-    // committed its layout pass.
-    const handle = requestAnimationFrame(() => {
-      chart.timeScale().setVisibleRange({ from: from as Time, to: to as Time });
-    });
-    return () => cancelAnimationFrame(handle);
-  }, [rangeStart, marketData]);
-
   return (
     <div className="space-y-2">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="flex items-center gap-2 text-xs">
-          <ToggleChip label="SMA" on={overlay.sma} onChange={v => setOverlay(o => ({ ...o, sma: v }))} />
-          <ToggleChip label="BB" on={overlay.bb} onChange={v => setOverlay(o => ({ ...o, bb: v }))} />
-          <ToggleChip label="Volume" on={overlay.volume} onChange={v => setOverlay(o => ({ ...o, volume: v }))} />
-        </div>
-        <div className="flex items-center gap-2 text-xs text-zinc-400">
-          <span>From</span>
-          <input
-            type="date"
-            value={rangeStart}
-            onChange={(e) => setRangeStart(e.target.value)}
-            className="bg-zinc-800 border border-zinc-700 rounded-md px-2 py-1 text-zinc-200"
-          />
-          <span className="text-zinc-600">→ now</span>
-        </div>
+      <div className="flex items-center gap-2 text-xs">
+        <ToggleChip label="SMA" on={overlay.sma} onChange={v => setOverlay(o => ({ ...o, sma: v }))} />
+        <ToggleChip label="BB" on={overlay.bb} onChange={v => setOverlay(o => ({ ...o, bb: v }))} />
+        <ToggleChip label="Volume" on={overlay.volume} onChange={v => setOverlay(o => ({ ...o, volume: v }))} />
       </div>
       <div ref={containerRef} className="w-full h-[420px] bg-[#0c0c0f] border border-[#1e1e26] rounded-xl" />
     </div>

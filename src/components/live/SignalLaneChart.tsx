@@ -61,12 +61,17 @@ export default function SignalLaneChart({ sessions, tradesBySession, onChartRead
     // line itself invisible — only markers show. The price scale is hidden.
     sessions.forEach((session) => {
       const lane = sessionIds.length - sessionIds.indexOf(session.id);  // top → bottom
+      const scaleId = `lane-${session.id}`;
       const series = chart.addLineSeries({
         color: "rgba(0,0,0,0)",
         priceLineVisible: false,
         lastValueVisible: false,
         crosshairMarkerVisible: false,
+        priceScaleId: scaleId,
       });
+      // Hidden per-session scale so the integer lane value never paints axis
+      // labels nor influences the (already-hidden) right scale's range.
+      chart.priceScale(scaleId).applyOptions({ visible: false });
       seriesRef.current[session.id] = series;
 
       const trades = tradesBySession[session.id] ?? [];

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "../components/ui/Button";
 import { Card, CardContent, CardHeader } from "../components/ui/Card";
 import { Plus, Trash2 } from "lucide-react";
@@ -9,7 +9,14 @@ import CandleChart from "../components/live/CandleChart";
 import SignalLaneChart from "../components/live/SignalLaneChart";
 import { useChartSync } from "../components/live/charts/useChartSync";
 import type { IChartApi } from "lightweight-charts";
+import type { LiveTrade, MarketData } from "../types";
 import { useLiveTradingStore } from "../stores/liveTradingStore";
+
+const defaultRangeStart = (): string => {
+  const d = new Date();
+  d.setDate(d.getDate() - 7);
+  return d.toISOString().slice(0, 10);
+};
 
 export default function LiveTradingPage() {
   const {
@@ -24,6 +31,11 @@ export default function LiveTradingPage() {
   const [candleChart, setCandleChart] = useState<IChartApi | null>(null);
   const [laneChart, setLaneChart] = useState<IChartApi | null>(null);
   useChartSync(candleChart, laneChart);
+
+  // Single source of truth for the chart window. Both charts receive data
+  // already filtered by this date so they auto-fit consistently and the
+  // useChartSync time-based binding works without surprises.
+  const [rangeStart, setRangeStart] = useState<string>(defaultRangeStart);
 
   useEffect(() => {
     refreshAll().then(() => {
@@ -43,27 +55,54 @@ export default function LiveTradingPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionIdsKey]);
 
+  // Derived: market data and trades scoped to the visible window.
+  const cutoffMs = useMemo(
+    () => new Date(rangeStart + "T00:00:00Z").getTime(),
+    [rangeStart],
+  );
+  const visibleMarketData = useMemo<MarketData[]>(() => {
+    if (!marketData) return [];
+    return marketData.filter((m) => new Date(m.candle.timestamp).getTime() >= cutoffMs);
+  }, [marketData, cutoffMs]);
+  const visibleTradesBySession = useMemo<Record<number, LiveTrade[]>>(() => {
+    const out: Record<number, LiveTrade[]> = {};
+    for (const [sid, trades] of Object.entries(tradesBySession)) {
+      out[Number(sid)] = trades.filter((t) => new Date(t.ts).getTime() >= cutoffMs);
+    }
+    return out;
+  }, [tradesBySession, cutoffMs]);
+
   return (
     <div className="space-y-4 animate-fade-in">
       <LiveKpiBar tick={ticks["KRW-ETH"]} />
 
-      {marketData && marketData.length > 0 && (
+      {visibleMarketData.length > 0 && (
         <Card>
-          <CardHeader>
+          <CardHeader className="flex items-center justify-between">
             <h3 className="text-sm font-semibold text-zinc-300">KRW-ETH (1h)</h3>
+            <div className="flex items-center gap-2 text-xs text-zinc-400">
+              <span>From</span>
+              <input
+                type="date"
+                value={rangeStart}
+                onChange={(e) => setRangeStart(e.target.value)}
+                className="bg-zinc-800 border border-zinc-700 rounded-md px-2 py-1 text-zinc-200"
+              />
+              <span className="text-zinc-600">→ now</span>
+            </div>
           </CardHeader>
           <CardContent>
             <CandleChart
-              marketData={marketData}
+              marketData={visibleMarketData}
               sessions={sessions}
-              tradesBySession={tradesBySession}
+              tradesBySession={visibleTradesBySession}
               tick={ticks["KRW-ETH"]}
               onChartReady={setCandleChart}
             />
             <div className="mt-2">
               <SignalLaneChart
                 sessions={sessions}
-                tradesBySession={tradesBySession}
+                tradesBySession={visibleTradesBySession}
                 onChartReady={setLaneChart}
               />
             </div>
