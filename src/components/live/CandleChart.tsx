@@ -82,17 +82,19 @@ export default function CandleChart({
       timeScale: {
         borderColor: "#1e1e26", timeVisible: true, secondsVisible: false,
         minBarSpacing: 0.5,
+        // Tick marks below the chart (per-bar labels). Three different
+        // resolutions depending on how zoomed-in the user is:
+        //   Year/Month/DayOfMonth → date stamp; Time → hour stamp.
+        tickMarkFormatter: (time: unknown) => formatTime(time, "tick"),
       },
       rightPriceScale: { borderColor: "#1e1e26" },
       handleScale: { axisPressedMouseMove: false, axisDoubleClickReset: false, mouseWheel: true, pinch: true },
-      // Override the default Korean-locale crosshair label "21 4월 '26 01:00"
-      // with a clean ISO-style string — works regardless of browser locale.
+      // Force English locale so the auto-detected Korean format
+      // ("21 4월 '26 01:00") doesn't leak through, then override the
+      // crosshair / tooltip time string with a clean ISO-ish formatter.
       localization: {
-        timeFormatter: (t: number) => {
-          const d = new Date(t * 1000);
-          const pad = (n: number) => String(n).padStart(2, "0");
-          return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-        },
+        locale: "en-US",
+        timeFormatter: (time: unknown) => formatTime(time, "full"),
       },
       autoSize: true,
     });
@@ -353,6 +355,29 @@ export default function CandleChart({
       <div ref={containerRef} className="w-full h-[480px] bg-[#0c0c0f] border border-[#1e1e26] rounded-xl" />
     </div>
   );
+}
+
+/** Robust time stringifier used both for axis tick marks and the crosshair
+ *  label. lightweight-charts can hand us a UTCTimestamp (number, seconds), an
+ *  RFC3339 string, or a BusinessDay object depending on series time format. */
+function formatTime(time: unknown, mode: "tick" | "full"): string {
+  let d: Date | null = null;
+  if (typeof time === "number") d = new Date(time * 1000);
+  else if (typeof time === "string") d = new Date(time);
+  else if (time && typeof time === "object" && "year" in time) {
+    const bd = time as { year: number; month: number; day: number };
+    d = new Date(Date.UTC(bd.year, bd.month - 1, bd.day));
+  }
+  if (!d || isNaN(d.getTime())) return String(time ?? "");
+  const pad = (n: number) => String(n).padStart(2, "0");
+  if (mode === "full") {
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+  // Compact tick label: hour-of-day if not midnight, else MM-DD.
+  const h = d.getHours();
+  const m = d.getMinutes();
+  if (h === 0 && m === 0) return `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return `${pad(h)}:${pad(m)}`;
 }
 
 function Legend({ label, color }: { label: string; color: string }) {
