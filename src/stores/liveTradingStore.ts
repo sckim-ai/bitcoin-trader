@@ -11,7 +11,7 @@ import {
   deletePreset as apiDeletePreset,
   subscribeTicks,
 } from "../lib/live";
-import { getMarketData } from "../lib/api";
+import { getMarketData, autoUpdateAllMarkets } from "../lib/api";
 
 interface LiveTradingState {
   sessions: LiveSession[];
@@ -52,8 +52,17 @@ export const useLiveTradingStore = create<LiveTradingState>((set, get) => ({
     if (get().loadingMarketData) return;
     set({ loadingMarketData: true });
     try {
+      // Best-effort: pull the latest hourly bars from Upbit so the chart
+      // reflects current market state. Ignore failure (offline / rate-limit)
+      // — we still render whatever's already in the local DB.
+      try { await autoUpdateAllMarkets(); } catch { /* offline-safe */ }
       const data = await getMarketData("ETH", "hour");
-      set({ marketData: data });
+      // Trim to the last 90 days. The DB may carry legacy history (e.g.
+      // CSV-imported 2019–2020 candles) that's irrelevant for the live chart
+      // and would otherwise stretch the auto-fit range away from "now".
+      const cutoffMs = Date.now() - 90 * 24 * 60 * 60 * 1000;
+      const recent = data.filter((m) => new Date(m.candle.timestamp).getTime() >= cutoffMs);
+      set({ marketData: recent });
     } finally {
       set({ loadingMarketData: false });
     }
