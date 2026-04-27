@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { LiveSession, LiveTrade, Preset, TickData } from "../types";
+import type { LiveSession, LiveTrade, MarketData, Preset, TickData } from "../types";
 import {
   listPresets,
   listSessions,
@@ -11,6 +11,7 @@ import {
   deletePreset as apiDeletePreset,
   subscribeTicks,
 } from "../lib/live";
+import { getMarketData } from "../lib/api";
 
 interface LiveTradingState {
   sessions: LiveSession[];
@@ -19,11 +20,15 @@ interface LiveTradingState {
   /// Market-keyed most-recent tick snapshot. Updated by the tick subscription.
   ticks: Record<string, TickData>;
   loading: boolean;
+  marketData: MarketData[] | null;
+  loadingMarketData: boolean;
 
   refreshAll: () => Promise<void>;
   refreshSessions: () => Promise<void>;
   refreshPresets: () => Promise<void>;
   refreshTrades: (sessionId: number) => Promise<void>;
+  loadMarketData: () => Promise<void>;
+  loadAllSessionTrades: () => Promise<void>;
 
   createSession: (args: Parameters<typeof apiCreateSession>[0]) => Promise<void>;
   startSession: (id: number) => Promise<void>;
@@ -40,6 +45,29 @@ export const useLiveTradingStore = create<LiveTradingState>((set, get) => ({
   tradesBySession: {},
   ticks: {},
   loading: false,
+  marketData: null,
+  loadingMarketData: false,
+
+  loadMarketData: async () => {
+    if (get().loadingMarketData) return;
+    set({ loadingMarketData: true });
+    try {
+      const data = await getMarketData("ETH", "hour");
+      set({ marketData: data });
+    } finally {
+      set({ loadingMarketData: false });
+    }
+  },
+
+  loadAllSessionTrades: async () => {
+    const ids = get().sessions.map((s) => s.id);
+    const results = await Promise.all(
+      ids.map(async (id) => [id, await listSessionTrades(id)] as const),
+    );
+    const map: Record<number, LiveTrade[]> = {};
+    for (const [id, trades] of results) map[id] = trades;
+    set({ tradesBySession: map });
+  },
 
   refreshAll: async () => {
     set({ loading: true });
