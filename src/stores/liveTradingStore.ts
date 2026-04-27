@@ -83,7 +83,7 @@ export const useLiveTradingStore = create<LiveTradingState>((set, get) => ({
     set({ tradesBySession: map });
   },
 
-  loadSessionSignals: async (sessionId, since) => {
+  loadSessionSignals: async (sessionId, _since) => {
     const session = get().sessions.find((s) => s.id === sessionId);
     if (!session) return;
     const preset = get().presets.find((p) => p.id === session.preset_id);
@@ -91,6 +91,14 @@ export const useLiveTradingStore = create<LiveTradingState>((set, get) => ({
     try {
       const params = JSON.parse(preset.params_json) as Record<string, number>;
       const today = new Date().toISOString().slice(0, 10);
+      // Use the *preset's* simulation start, NOT the user's display window.
+      // session_engine on the backend runs each cycle with preset.since_ts as
+      // the lower bound, so that's what produced the trades stored in
+      // live_trades. Re-running with a shorter window here gives indicator
+      // warmup a different starting point (SMA_60 etc. need 60+ bars), which
+      // shifts early signal-type transitions and visually decouples them
+      // from the trade markers on the same chart.
+      const since = preset.since_ts ?? _since;
       const result = await runSimulation(
         preset.strategy_key,
         "ETH",
@@ -180,11 +188,13 @@ export const useLiveTradingStore = create<LiveTradingState>((set, get) => ({
 }));
 
 /// Derive current equity and unrealized P/L for a session using the latest tick.
-/// Falls back to the DB-persisted `current_equity` if no tick is available yet.
+/// holding 중에는 baseEquity 전체가 코인으로 변환된 것으로 보고 가격 비율을 적용한다.
+/// (이전 구현은 buy_volume을 곱해 미실현을 계산했지만, 전략 내부 set_volume이
+///  비현실적인 값을 만들 때 화면에서 폭주하는 통로가 됐음 — 비율 기반은 그 통로를 차단.)
 export function deriveSessionPnl(session: LiveSession, tick: TickData | undefined) {
   const baseEquity = session.current_equity ?? session.initial_capital;
   if (session.current_position !== "holding" || tick == null
-      || session.current_buy_price == null || session.current_buy_volume == null) {
+      || session.current_buy_price == null || session.current_buy_price <= 0) {
     return {
       currentEquity: baseEquity,
       unrealizedPnl: 0,
@@ -192,17 +202,12 @@ export function deriveSessionPnl(session: LiveSession, tick: TickData | undefine
       pnlPctSinceStart: baseEquity / session.initial_capital * 100 - 100,
     };
   }
-  // Real-time P/L = baseEquity + (tick price drift from buy price) × volume.
-  // This approximation anchors on buy_price rather than last candle close; the
-  // drift is exact at entry and grows ∝ (last_mark − buy_price) × volume.
-  // For Phase 2 display purposes drift is small (<1% typically); the session
-  // row's `current_equity` remains the authoritative snapshot.
-  const unrealized = (tick.price - session.current_buy_price) * session.current_buy_volume;
-  const currentEquity = baseEquity + unrealized;
+  const ratio = tick.price / session.current_buy_price;
+  const currentEquity = baseEquity * ratio;
   return {
     currentEquity,
-    unrealizedPnl: unrealized,
-    unrealizedPnlPct: (tick.price / session.current_buy_price - 1) * 100,
+    unrealizedPnl: baseEquity * (ratio - 1),
+    unrealizedPnlPct: (ratio - 1) * 100,
     pnlPctSinceStart: currentEquity / session.initial_capital * 100 - 100,
   };
 }
