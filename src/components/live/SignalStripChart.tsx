@@ -4,7 +4,7 @@ import {
   type IChartApi, type ISeriesApi, type UTCTimestamp,
 } from "lightweight-charts";
 import type { MarketData, SignalEvent } from "../../types";
-import { isoToUtcSec } from "./charts/runningCandle";
+import { isoToUtcSec, hourBucketSec } from "./charts/runningCandle";
 
 /**
  * Discrete colour-per-candle strip mirroring the strategy's signal log.
@@ -48,6 +48,9 @@ export default function SignalStripChart({ marketData, signals, onChartReady }: 
       timeScale: { borderColor: "#1e1e26", timeVisible: true, secondsVisible: false },
       rightPriceScale: { visible: false },
       leftPriceScale: { visible: false },
+      // Drag = pan only; never let axis-region drags trigger a zoom — that
+      // surprises users who drag past the latest bar.
+      handleScale: { axisPressedMouseMove: false, axisDoubleClickReset: false, mouseWheel: true, pinch: true },
       autoSize: true,
     });
     chartRef.current = chart;
@@ -90,6 +93,21 @@ export default function SignalStripChart({ marketData, signals, onChartReady }: 
         color: SIGNAL_COLORS[current] ?? SIGNAL_COLORS.ready,
       };
     });
+
+    // Match the candle chart's running-bar extension: append a cell at the
+    // current hour bucket so the strip's right edge tracks the live candle.
+    // Painted with the most-recent signal so the colour transition appears
+    // immediately on the new bucket.
+    const nowBucket = hourBucketSec(Date.now());
+    const lastTime = data.length > 0 ? (data[data.length - 1].time as number) : null;
+    if (lastTime != null && nowBucket > lastTime) {
+      data.push({
+        time: nowBucket as UTCTimestamp,
+        value: 1,
+        color: SIGNAL_COLORS[current] ?? SIGNAL_COLORS.ready,
+      });
+    }
+
     series.setData(data);
   }, [marketData, signals]);
 

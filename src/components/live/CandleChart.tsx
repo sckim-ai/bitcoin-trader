@@ -67,6 +67,9 @@ export default function CandleChart({
       },
       timeScale: { borderColor: "#1e1e26", timeVisible: true, secondsVisible: false },
       rightPriceScale: { borderColor: "#1e1e26" },
+      // Drag the chart body to pan only; no axis-drag scaling. Wheel and
+      // pinch still zoom for power users.
+      handleScale: { axisPressedMouseMove: false, axisDoubleClickReset: false, mouseWheel: true, pinch: true },
       autoSize: true,
     });
     chartRef.current = chart;
