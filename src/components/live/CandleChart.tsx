@@ -49,6 +49,14 @@ export default function CandleChart({
 
   const [overlay, setOverlay] = useState<OverlayState>({ sma: true, bb: false, volume: true });
 
+  // User picks the start date; the right edge always tracks "now" so the
+  // running candle stays in view. Default = 7 days ago.
+  const [rangeStart, setRangeStart] = useState<string>(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 7);
+    return d.toISOString().slice(0, 10);
+  });
+
   // ── 1. Initialise chart instance once ────────────────────────────────
   useEffect(() => {
     if (!containerRef.current) return;
@@ -211,12 +219,37 @@ export default function CandleChart({
     });
   }, [tick]);
 
+  // ── 5. Apply user-selected visible window ────────────────────────────
+  // Right edge always tracks "now" so the running candle stays in view.
+  // Sister chart (SignalLaneChart) follows via useChartSync subscription.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || marketData.length === 0) return;
+    const from = Math.floor(new Date(rangeStart + "T00:00:00Z").getTime() / 1000);
+    const to = Math.floor(Date.now() / 1000);
+    if (Number.isFinite(from) && from < to) {
+      chart.timeScale().setVisibleRange({ from: from as Time, to: to as Time });
+    }
+  }, [rangeStart, marketData]);
+
   return (
     <div className="space-y-2">
-      <div className="flex items-center gap-2 text-xs">
-        <ToggleChip label="SMA" on={overlay.sma} onChange={v => setOverlay(o => ({ ...o, sma: v }))} />
-        <ToggleChip label="BB" on={overlay.bb} onChange={v => setOverlay(o => ({ ...o, bb: v }))} />
-        <ToggleChip label="Volume" on={overlay.volume} onChange={v => setOverlay(o => ({ ...o, volume: v }))} />
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2 text-xs">
+          <ToggleChip label="SMA" on={overlay.sma} onChange={v => setOverlay(o => ({ ...o, sma: v }))} />
+          <ToggleChip label="BB" on={overlay.bb} onChange={v => setOverlay(o => ({ ...o, bb: v }))} />
+          <ToggleChip label="Volume" on={overlay.volume} onChange={v => setOverlay(o => ({ ...o, volume: v }))} />
+        </div>
+        <div className="flex items-center gap-2 text-xs text-zinc-400">
+          <span>From</span>
+          <input
+            type="date"
+            value={rangeStart}
+            onChange={(e) => setRangeStart(e.target.value)}
+            className="bg-zinc-800 border border-zinc-700 rounded-md px-2 py-1 text-zinc-200"
+          />
+          <span className="text-zinc-600">→ now</span>
+        </div>
       </div>
       <div ref={containerRef} className="w-full h-[420px] bg-[#0c0c0f] border border-[#1e1e26] rounded-xl" />
     </div>
