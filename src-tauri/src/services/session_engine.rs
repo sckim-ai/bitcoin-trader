@@ -57,45 +57,40 @@ pub async fn run_session_cycle(
         .map_err(|e| -> BoxErr { e.to_string().into() })?;
     let result = strategy.run_simulation(&data, &params);
 
-    // 3. Diff: only new completed trades.
-    let new_count = {
-        let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
-        let existing = live_repo::count_completed_trades(&conn, session.id)
-            .map_err(|e| -> BoxErr { e.to_string().into() })?;
-        result.trades.len().saturating_sub(existing)
-    };
-
-    // TradeRecord는 볼륨을 노출하지 않는다. Phase 1 live_trades는 표시 용도로만
-    // 쓰이므로, 세션 초기 자본을 체결가로 나눈 러프한 값을 저장한다.
-    // (Phase 4 실전 주문 시에는 실제 체결량이 별도 경로로 기록된다.)
+    // 3. Replace paper trades with the current simulation's full result.
+    //    Earlier we used a diff-insert (only append new completions), but
+    //    that's not idempotent across cycles when the data window itself
+    //    shifts: if today's run produces a trade at a slightly different
+    //    timestamp than yesterday's, the old row stayed in DB and decoupled
+    //    visually from the (always-fresh) signal_log. Replacing on each
+    //    cycle keeps trades and signal_log byte-aligned. Real-trade rows
+    //    (is_real=1) are preserved by `delete_paper_trades`.
+    let new_count = result.trades.len();
     let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
-    if new_count > 0 {
-        let offset = result.trades.len() - new_count;
-        let fee_rate = params.v3_fee_rate;
-        for t in &result.trades[offset..] {
-            let rough_volume = if t.buy_price > 0.0 {
-                session.initial_capital / t.buy_price
-            } else {
-                0.0
-            };
-            // Insert buy row
-            live_repo::insert_trade(
-                &conn, session.id, &t.buy_timestamp, "buy",
-                t.buy_price, rough_volume,
-                t.buy_price * rough_volume * fee_rate,
-                &t.buy_signal, None, None, false,
-            ).map_err(|e| -> BoxErr { e.to_string().into() })?;
-            // Insert sell row — pnl/pnl_pct
-            live_repo::insert_trade(
-                &conn, session.id, &t.sell_timestamp, "sell",
-                t.sell_price, rough_volume,
-                t.sell_price * rough_volume * fee_rate,
-                &t.sell_signal,
-                Some((t.sell_price - t.buy_price) * rough_volume),
-                Some(t.pnl_pct),
-                false,
-            ).map_err(|e| -> BoxErr { e.to_string().into() })?;
-        }
+    live_repo::delete_paper_trades(&conn, session.id)
+        .map_err(|e| -> BoxErr { e.to_string().into() })?;
+    let fee_rate = params.v3_fee_rate;
+    for t in result.trades.iter() {
+        let rough_volume = if t.buy_price > 0.0 {
+            session.initial_capital / t.buy_price
+        } else {
+            0.0
+        };
+        live_repo::insert_trade(
+            &conn, session.id, &t.buy_timestamp, "buy",
+            t.buy_price, rough_volume,
+            t.buy_price * rough_volume * fee_rate,
+            &t.buy_signal, None, None, false,
+        ).map_err(|e| -> BoxErr { e.to_string().into() })?;
+        live_repo::insert_trade(
+            &conn, session.id, &t.sell_timestamp, "sell",
+            t.sell_price, rough_volume,
+            t.sell_price * rough_volume * fee_rate,
+            &t.sell_signal,
+            Some((t.sell_price - t.buy_price) * rough_volume),
+            Some(t.pnl_pct),
+            false,
+        ).map_err(|e| -> BoxErr { e.to_string().into() })?;
     }
 
     // 4. Current position snapshot from result.last_*.

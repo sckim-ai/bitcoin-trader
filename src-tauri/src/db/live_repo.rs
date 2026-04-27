@@ -167,6 +167,18 @@ pub fn delete_session(conn: &Connection, id: i64) -> Result<usize> {
     conn.execute("DELETE FROM live_sessions WHERE id = ?1", [id])
 }
 
+/// Replace this session's paper-trade rows with a clean slate. Real-trade
+/// rows (`is_real=1`) are preserved — those represent actual Upbit fills and
+/// should never be deleted. Used by session_engine before inserting the
+/// current simulation's trades, guaranteeing live_trades always matches
+/// the latest result.trades + result.signal_log.
+pub fn delete_paper_trades(conn: &Connection, session_id: i64) -> Result<usize> {
+    conn.execute(
+        "DELETE FROM live_trades WHERE session_id = ?1 AND is_real = 0",
+        [session_id],
+    )
+}
+
 /// Save the latest cycle's signal_log JSON. Overwrites the previous each
 /// cycle so reads always see the freshest mapping.
 pub fn update_session_signal_log(
