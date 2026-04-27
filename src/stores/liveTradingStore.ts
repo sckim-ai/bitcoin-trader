@@ -90,28 +90,25 @@ export const useLiveTradingStore = create<LiveTradingState>((set, get) => ({
     if (!preset) return;
     try {
       const params = JSON.parse(preset.params_json) as Record<string, number>;
-      const today = new Date().toISOString().slice(0, 10);
-      // Use the *preset's* simulation start, NOT the user's display window.
-      // session_engine on the backend runs each cycle with preset.since_ts as
-      // the lower bound, so that's what produced the trades stored in
-      // live_trades. Re-running with a shorter window here gives indicator
-      // warmup a different starting point (SMA_60 etc. need 60+ bars), which
-      // shifts early signal-type transitions and visually decouples them
-      // from the trade markers on the same chart.
-      const since = preset.since_ts ?? _since;
+      // Pass null for since/until → backend uses every candle currently in
+      // the DB. That gives the strategy the same indicator warmup that
+      // session_engine had on its last cycle (it also reads from the same
+      // local DB), so trade-marker timestamps in live_trades match the
+      // signal_log timestamps returned here. Filtering with preset.since_ts
+      // earlier could over-shrink the window if the DB history is sparse.
       const result = await runSimulation(
         preset.strategy_key,
         "ETH",
         "hour",
         params,
-        since,
-        today,
+        null,
+        null,
       );
       set((s) => ({
         signalsBySession: { ...s.signalsBySession, [sessionId]: result.signal_log ?? [] },
       }));
     } catch (e) {
-      console.warn("loadSessionSignals failed", sessionId, e);
+      console.error("loadSessionSignals failed", sessionId, e);
     }
   },
 

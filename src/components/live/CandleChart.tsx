@@ -256,12 +256,12 @@ export default function CandleChart({
         position: t.side === "buy" ? "belowBar" : "aboveBar",
         color,
         shape: t.side === "buy" ? "arrowUp" : "arrowDown",
-        // No text label — long labels (e.g. "Short_156%") get drawn next to
-        // the arrow which lightweight-charts shifts horizontally to fit,
-        // making the marker appear visually offset from the candle/strip
-        // even though the underlying time is exact. Color (per-session)
-        // and an optional "R" badge for real-trade rows are enough.
-        text: t.is_real ? "R" : undefined,
+        // Restore label so the user can identify which session a marker
+        // belongs to. The earlier visual misalignment between marker and
+        // signal strip was caused by signal_log being computed from a
+        // different data window than the trades — fixed in store —
+        // not by the label text shifting the arrow.
+        text: t.is_real ? `${session.label} (R)` : session.label,
         size: t.is_real ? 2 : 1,
       }));
       if (markers.length > 0) {
