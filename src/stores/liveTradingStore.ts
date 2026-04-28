@@ -27,6 +27,10 @@ interface LiveTradingState {
   /// Per-candle signal log derived by replaying a session's preset on the
   /// visible window. Keyed by session.id.
   signalsBySession: Record<number, SignalEvent[]>;
+  /// Sessions whose markers / signals should be hidden from the chart. An
+  /// empty array means every session is visible — that's why we track the
+  /// negative ("hidden") set: new sessions show up by default, no sync needed.
+  hiddenSessionIds: number[];
 
   refreshAll: () => Promise<void>;
   refreshSessions: () => Promise<void>;
@@ -42,6 +46,9 @@ interface LiveTradingState {
   deleteSession: (id: number) => Promise<void>;
   deletePreset: (id: number) => Promise<void>;
 
+  toggleSessionVisibility: (id: number) => void;
+  setAllSessionsVisible: (visible: boolean) => void;
+
   subscribeEvents: () => Promise<() => void>;
 }
 
@@ -54,6 +61,7 @@ export const useLiveTradingStore = create<LiveTradingState>((set, get) => ({
   marketData: null,
   loadingMarketData: false,
   signalsBySession: {},
+  hiddenSessionIds: [],
 
   loadMarketData: async () => {
     if (get().loadingMarketData) return;
@@ -161,6 +169,25 @@ export const useLiveTradingStore = create<LiveTradingState>((set, get) => ({
   deleteSession: async (id) => {
     await apiDelete(id);
     await get().refreshSessions();
+    // Drop the deleted session from the hidden set so the array doesn't
+    // accumulate stale ids over time.
+    set((s) => ({ hiddenSessionIds: s.hiddenSessionIds.filter((x) => x !== id) }));
+  },
+
+  toggleSessionVisibility: (id) => {
+    set((s) => ({
+      hiddenSessionIds: s.hiddenSessionIds.includes(id)
+        ? s.hiddenSessionIds.filter((x) => x !== id)
+        : [...s.hiddenSessionIds, id],
+    }));
+  },
+
+  setAllSessionsVisible: (visible) => {
+    if (visible) {
+      set({ hiddenSessionIds: [] });
+    } else {
+      set((s) => ({ hiddenSessionIds: s.sessions.map((x) => x.id) }));
+    }
   },
 
   deletePreset: async (id) => {
@@ -198,11 +225,13 @@ export const useLiveTradingStore = create<LiveTradingState>((set, get) => ({
 }));
 
 /// Derive current equity and unrealized P/L for a session using the latest tick.
-/// holding 중에는 baseEquity 전체가 코인으로 변환된 것으로 보고 가격 비율을 적용한다.
-/// (이전 구현은 buy_volume을 곱해 미실현을 계산했지만, 전략 내부 set_volume이
-///  비현실적인 값을 만들 때 화면에서 폭주하는 통로가 됐음 — 비율 기반은 그 통로를 차단.)
+/// baseEquity = "Start 시점 자본 × (1 + live_return)" — 사용자가 실제 라이브로
+/// 운용한 결과 자본만 반영. (백엔드의 current_equity는 since~now 통합이라
+/// baseline+live가 섞여 있어 화면에 그대로 쓰면 "Live=0%인데 Equity=+800%" 같은
+/// 모순이 발생함. live_return 기반으로 통일해 모든 컬럼이 같은 시간축을 가짐.)
+/// holding 중에는 baseEquity 전체가 코인으로 변환된 것으로 보고 가격 비율을 적용.
 export function deriveSessionPnl(session: LiveSession, tick: TickData | undefined) {
-  const baseEquity = session.current_equity ?? session.initial_capital;
+  const baseEquity = session.initial_capital * (1 + (session.live_return ?? 0) / 100);
   if (session.current_position !== "holding" || tick == null
       || session.current_buy_price == null || session.current_buy_price <= 0) {
     return {

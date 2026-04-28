@@ -450,7 +450,6 @@ impl Strategy for RegimeAdaptiveStrategy {
         let total_trades = result.trades.len();
         result.total_trades = total_trades;
         result.total_return = total_return * 100.0;
-        result.fee_adjusted_return = result.total_return;
         result.market_return = market_return * 100.0;
         result.annual_return = annual_return * 100.0;
         result.max_drawdown = max_dd * 100.0;

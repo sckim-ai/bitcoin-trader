@@ -17,6 +17,11 @@ pub struct Preset {
     pub since_ts: Option<String>,
     /// Backtest window end (YYYY-MM-DD).
     pub until_ts: Option<String>,
+    /// Total return % measured during the simulation that produced this preset.
+    /// None if the preset predates baseline tracking (migration 009).
+    pub baseline_return: Option<f64>,
+    /// Number of completed trades during that same simulation.
+    pub baseline_trades: Option<i32>,
     pub created_at: String,
 }
 
@@ -86,6 +91,10 @@ pub struct LiveSession {
     pub current_buy_price: Option<f64>,
     pub current_buy_volume: Option<f64>,
     pub current_equity: Option<f64>,
+    /// Cumulative return % from real_started_at onward (closed trades only).
+    /// Distinct from preset.baseline_return: this is the live track record,
+    /// not the static backtest result.
+    pub live_return: f64,
     pub created_at: String,
 }
 

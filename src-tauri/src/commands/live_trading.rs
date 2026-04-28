@@ -22,6 +22,10 @@ pub struct SavePresetArgs {
     pub partial_params: serde_json::Value,
     pub source: Option<String>,
     pub source_run_id: Option<i64>,
+    /// Baseline metrics from the simulation that produced this preset.
+    /// Optional so older callers (without simulation context) still work.
+    pub baseline_return: Option<f64>,
+    pub baseline_trades: Option<i32>,
 }
 
 #[tauri::command]
@@ -64,6 +68,8 @@ pub fn save_preset(
         args.timeframe.as_deref(),
         args.since_ts.as_deref(),
         args.until_ts.as_deref(),
+        args.baseline_return,
+        args.baseline_trades,
     )
     .map_err(|e| e.to_string())
 }

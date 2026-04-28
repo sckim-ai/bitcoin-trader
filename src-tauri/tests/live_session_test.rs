@@ -13,6 +13,7 @@ fn setup_db() -> Connection {
     conn.execute_batch(include_str!("../migrations/006_live_trading.sql")).unwrap();
     conn.execute_batch(include_str!("../migrations/007_preset_context.sql")).unwrap();
     conn.execute_batch(include_str!("../migrations/008_session_signal_log.sql")).unwrap();
+    conn.execute_batch(include_str!("../migrations/009_baseline_metrics.sql")).unwrap();
     conn
 }
 
@@ -21,7 +22,7 @@ fn full_session_lifecycle() {
     let conn = setup_db();
 
     // 1) preset 생성
-    let pid = live_repo::insert_preset(&conn, 1, "V3-OptA", "V3", "{}", "manual", None, None, None, None, None).unwrap();
+    let pid = live_repo::insert_preset(&conn, 1, "V3-OptA", "V3", "{}", "manual", None, None, None, None, None, None, None).unwrap();
 
     // 2) 세션 3개 생성
     let s1 = live_repo::insert_session(&conn, 1, "S1", pid, "KRW-ETH", "paper", 1_000_000.0, "2026-04-24T00:00:00Z").unwrap();
@@ -70,7 +71,7 @@ fn replace_paper_trades_preserves_real() {
     // the latest signal_log. Real-trade rows (is_real=1) must NOT be touched
     // — they represent actual Upbit fills and survive across cycles.
     let conn = setup_db();
-    let pid = live_repo::insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None).unwrap();
+    let pid = live_repo::insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None, None, None).unwrap();
     let sid = live_repo::insert_session(&conn, 1, "S", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z").unwrap();
 
     // Three rows: paper buy, paper sell, real buy.

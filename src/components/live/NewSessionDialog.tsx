@@ -77,17 +77,33 @@ export default function NewSessionDialog({ presets, onClose, onSubmit }: Props) 
           <Input type="number" value={capital} onChange={(e) => setCapital(Number(e.target.value))} />
         </div>
 
-        <div className="text-xs text-zinc-500 bg-zinc-800/40 rounded-lg p-3">
-          <div className="text-zinc-400 mb-1">Simulation window</div>
+        <div className="text-xs text-zinc-500 bg-zinc-800/40 rounded-lg p-3 space-y-2">
           <div>
-            {selectedPreset?.since_ts && selectedPreset?.until_ts
-              ? <span className="text-zinc-200">{selectedPreset.since_ts} ~ now</span>
-              : <span className="text-zinc-500">프리셋의 시작 시점부터 현재까지 리플레이</span>
-            }
+            <div className="text-zinc-400 mb-1">Backtest window</div>
+            <div>
+              {selectedPreset?.since_ts
+                ? <span className="text-zinc-200">
+                    {selectedPreset.since_ts}{selectedPreset.until_ts ? ` ~ ${selectedPreset.until_ts}` : ""}
+                  </span>
+                : <span className="text-zinc-500">프리셋에 기간 정보 없음</span>
+              }
+            </div>
           </div>
-          <div className="text-zinc-600 mt-1">
-            Start를 누르면 이 구간을 즉시 리플레이해 현재 포지션·시그널을 계산하고,
-            이후 매 정시에 최신 봉으로 갱신합니다.
+          {selectedPreset?.baseline_return != null && (
+            <div>
+              <div className="text-zinc-400 mb-1">Baseline (preset)</div>
+              <div className="text-zinc-200">
+                <span className={selectedPreset.baseline_return >= 0 ? "text-emerald-400" : "text-rose-400"}>
+                  {selectedPreset.baseline_return >= 0 ? "+" : ""}{selectedPreset.baseline_return.toFixed(2)}%
+                </span>
+                {selectedPreset.baseline_trades != null && (
+                  <span className="text-zinc-500"> · {selectedPreset.baseline_trades} trades</span>
+                )}
+              </div>
+            </div>
+          )}
+          <div className="text-zinc-600 pt-1 border-t border-zinc-800">
+            Start 시점부터 발생한 매매만 별도로 누적해 baseline과 비교 가능하게 표시합니다.
           </div>
         </div>
 

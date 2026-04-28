@@ -84,6 +84,10 @@ export default function SimulationPage() {
       until_ts: until || undefined,
       partial_params: params,
       source: "manual",
+      // Capture the simulation's measured baseline so the live page can show
+      // it next to the running live_return for comparison.
+      baseline_return: result?.total_return,
+      baseline_trades: result?.total_trades,
     });
   };
 

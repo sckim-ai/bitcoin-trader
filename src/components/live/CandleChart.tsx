@@ -19,6 +19,10 @@ interface Props {
   tick: TickData | undefined;
   /** Per-bar signal log for the strip pane (already filtered upstream). */
   signals: SignalEvent[];
+  /** Sessions whose markers should be suppressed. The full `sessions` array
+   *  is still passed in so the palette stays stable across toggles — we only
+   *  skip drawing inside the marker loop. */
+  hiddenSessionIds?: number[];
   /** Called once when the underlying chart is created; null on unmount. */
   onChartReady?: (chart: IChartApi | null) => void;
 }
@@ -53,7 +57,7 @@ interface OverlayState {
  * window; lightweight-charts auto-fits to whatever it's given.
  */
 export default function CandleChart({
-  marketData, sessions, tradesBySession, tick, signals, onChartReady,
+  marketData, sessions, tradesBySession, tick, signals, hiddenSessionIds, onChartReady,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -247,24 +251,68 @@ export default function CandleChart({
     sessionSeriesRef.current = {};
 
     const sessionIds = sessions.map(s => s.id).slice().sort((a, b) => a - b);
+    const hidden = new Set(hiddenSessionIds ?? []);
+    // Profit/loss 색상 — 한국 주식 관행: 수익=파랑(blue-500), 손실=빨강(rose-500).
+    const PROFIT = "#3b82f6";
+    const LOSS = "#f43f5e";
     const allMarkers: SeriesMarker<Time>[] = [];
     for (const session of sessions) {
+      if (hidden.has(session.id)) continue;
       const color = colorFor(session.id, sessionIds);
       const trades = tradesBySession[session.id] ?? [];
       for (const t of trades) {
-        allMarkers.push({
-          time: isoToUtcSec(t.ts) as UTCTimestamp,
-          position: t.side === "buy" ? "belowBar" : "aboveBar",
-          color,
-          shape: t.side === "buy" ? "arrowUp" : "arrowDown",
-          text: t.is_real ? `${session.label} (R)` : session.label,
-          size: t.is_real ? 2 : 1,
-        });
+        const baseLabel = t.is_real ? `${session.label} (R)` : session.label;
+        const time = isoToUtcSec(t.ts) as UTCTimestamp;
+        const position = t.side === "buy" ? "belowBar" : "aboveBar";
+        const shape = t.side === "buy" ? "arrowUp" : "arrowDown";
+        const size = t.is_real ? 2 : 1;
+
+        // sell + pnl이 있으면 같은 시점에 마커 두 개를 stack해 두 줄을 표현.
+        // lightweight-charts는 marker당 단일 color만 받으므로(텍스트/화살표
+        // 같은 색을 공유), 줄별 다른 색을 내려면 마커 분리가 유일한 방법.
+        // 또한 lightweight-charts는 같은 time/position에서 "마지막에 push된
+        // 마커가 위쪽"으로 stack됨 → 이름을 위로 올리려면 이름을 나중에 push.
+        //
+        // 위→아래 표시 순서:
+        //   (위)  이름        — session 고유 색
+        //   (아래) 수익률      — 수익 파랑 / 손실 빨강
+        // 두 마커 모두 같은 shape를 가져 화살표가 두 번 그려지지만, 두 번째
+        // 마커의 shape을 'square' size=0 으로 두면 이름 마커의 화살표만
+        // 시각적으로 부각됨.
+        if (t.side === "sell" && t.pnl_pct != null) {
+          const pnlColor = t.pnl_pct >= 0 ? PROFIT : LOSS;
+          const sign = t.pnl_pct >= 0 ? "+" : "";
+          // 위→아래 표시 의도:
+          //   이름        ← session 색
+          //   수익률      ← 파랑/빨강
+          //   ↓           ← 화살표 (봉 가까이)
+          //
+          // lightweight-charts는 같은 time/position에서 (a) 마지막 push가
+          // 위쪽으로 쌓이고, (b) 한 마커 내부는 [텍스트 → shape] 순서로
+          // 그려짐. 따라서 화살표가 가장 아래에 오려면 "먼저 push되는 마커"가
+          // 화살표를 가져야 함 → 수익률 마커가 arrow, 이름 마커는 invisible.
+          //
+          // 1) 수익률 + arrowDown — 아래쪽 (먼저 push)
+          allMarkers.push({
+            time, position, shape, size,
+            color: pnlColor,
+            text: `${sign}${(t.pnl_pct * 100).toFixed(2)}%`,
+          });
+          // 2) 이름 + invisible shape — 위쪽 (나중에 push)
+          allMarkers.push({
+            time, position, shape: "square", size: 0,
+            color,
+            text: baseLabel,
+          });
+        } else {
+          // buy 또는 pnl_pct 없는 sell — 단일 마커
+          allMarkers.push({ time, position, shape, size, color, text: baseLabel });
+        }
       }
     }
     allMarkers.sort((a, b) => (a.time as number) - (b.time as number));
     candleSeries.setMarkers(allMarkers);
-  }, [sessions, tradesBySession]);
+  }, [sessions, tradesBySession, hiddenSessionIds]);
 
   // ── 3. Overlay toggles ───────────────────────────────────────────────
   useEffect(() => {

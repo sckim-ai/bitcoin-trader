@@ -73,7 +73,6 @@ export interface SimulationResult {
   profit_factor: number;
   avg_trade_return: number;
   max_consecutive_losses: number;
-  fee_adjusted_return: number;
   buy_signals: number;
   sell_signals: number;
   last_position: number;
@@ -174,6 +173,10 @@ export interface Preset {
   timeframe: string | null;
   since_ts: string | null;
   until_ts: string | null;
+  /** total_return % at the time the preset was saved (static baseline). */
+  baseline_return: number | null;
+  /** total_trades at the time the preset was saved. */
+  baseline_trades: number | null;
   created_at: string;
 }
 
@@ -187,6 +190,8 @@ export interface SavePresetArgs {
   partial_params: Record<string, number>;
   source?: string;
   source_run_id?: number;
+  baseline_return?: number;
+  baseline_trades?: number;
 }
 
 export interface LiveSession {
@@ -206,6 +211,8 @@ export interface LiveSession {
   current_buy_price: number | null;
   current_buy_volume: number | null;
   current_equity: number | null;
+  /** Cumulative return % from real_started_at onward (closed trades only). */
+  live_return: number;
   created_at: string;
 }
 

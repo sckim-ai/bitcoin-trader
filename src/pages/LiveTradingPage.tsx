@@ -6,6 +6,7 @@ import SessionTable from "../components/live/SessionTable";
 import NewSessionDialog from "../components/live/NewSessionDialog";
 import LiveKpiBar from "../components/live/LiveKpiBar";
 import CandleChart from "../components/live/CandleChart";
+import { colorFor } from "../components/live/charts/sessionPalette";
 import type { LiveTrade, MarketData } from "../types";
 import { useLiveTradingStore } from "../stores/liveTradingStore";
 
@@ -19,8 +20,10 @@ export default function LiveTradingPage() {
   const {
     sessions, presets, ticks,
     marketData, tradesBySession, signalsBySession,
+    hiddenSessionIds,
     refreshAll, createSession,
     startSession, stopSession, deleteSession, deletePreset,
+    toggleSessionVisibility, setAllSessionsVisible,
     subscribeEvents,
     loadMarketData, loadAllSessionTrades, loadSessionSignals,
   } = useLiveTradingStore();
@@ -52,17 +55,29 @@ export default function LiveTradingPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionIdsKey]);
 
-  // Default the strip's session to the first one we know about, and track it
-  // if the current selection is removed.
+  // Sorted full id list — the chart palette assigns colours by index in this
+  // array, so we MUST pass the full list (not the visible subset) to keep
+  // colours stable across visibility toggles.
+  const sortedSessionIds = useMemo(
+    () => sessions.map(s => s.id).slice().sort((a, b) => a - b),
+    [sessions],
+  );
+  const visibleSessions = useMemo(
+    () => sessions.filter(s => !hiddenSessionIds.includes(s.id)),
+    [sessions, hiddenSessionIds],
+  );
+
+  // Default the strip's session to the first VISIBLE one, and track it if
+  // the current selection is removed or hidden.
   useEffect(() => {
-    if (sessions.length === 0) {
+    if (visibleSessions.length === 0) {
       if (stripSessionId !== null) setStripSessionId(null);
       return;
     }
-    if (stripSessionId == null || !sessions.find(s => s.id === stripSessionId)) {
-      setStripSessionId(sessions[0].id);
+    if (stripSessionId == null || !visibleSessions.find(s => s.id === stripSessionId)) {
+      setStripSessionId(visibleSessions[0].id);
     }
-  }, [sessionIdsKey, stripSessionId, sessions]);
+  }, [sessionIdsKey, stripSessionId, visibleSessions]);
 
   // Re-run the strip's signal log when the picked session or window changes.
   useEffect(() => {
@@ -108,17 +123,59 @@ export default function LiveTradingPage() {
           </CardHeader>
           <CardContent>
             {sessions.length > 0 && (
-              <div className="mb-2 flex items-center justify-end gap-2 text-xs">
-                <span className="text-zinc-500">Signal session</span>
-                <select
-                  value={stripSessionId ?? ""}
-                  onChange={(e) => setStripSessionId(Number(e.target.value))}
-                  className="bg-zinc-800 border border-zinc-700 rounded-md px-2 py-1 text-zinc-200"
-                >
-                  {sessions.map((s) => (
-                    <option key={s.id} value={s.id}>{s.label}</option>
-                  ))}
-                </select>
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-zinc-500 mr-1">Show:</span>
+                  {sessions.map((s) => {
+                    const hidden = hiddenSessionIds.includes(s.id);
+                    const color = colorFor(s.id, sortedSessionIds);
+                    return (
+                      <button
+                        key={s.id}
+                        onClick={() => toggleSessionVisibility(s.id)}
+                        className={`flex items-center gap-1.5 px-2 py-0.5 rounded-md border transition-opacity ${
+                          hidden
+                            ? "border-zinc-800 bg-zinc-900/40 opacity-40"
+                            : "border-zinc-700 bg-zinc-800/60"
+                        }`}
+                        title={hidden ? "Click to show" : "Click to hide"}
+                      >
+                        <span
+                          className="w-2.5 h-2.5 rounded-sm"
+                          style={{ backgroundColor: color }}
+                        />
+                        <span className="text-zinc-200">{s.label}</span>
+                      </button>
+                    );
+                  })}
+                  <span className="mx-1 text-zinc-700">|</span>
+                  <button
+                    onClick={() => setAllSessionsVisible(true)}
+                    className="px-1.5 py-0.5 text-zinc-500 hover:text-zinc-200"
+                  >
+                    All
+                  </button>
+                  <button
+                    onClick={() => setAllSessionsVisible(false)}
+                    className="px-1.5 py-0.5 text-zinc-500 hover:text-zinc-200"
+                  >
+                    None
+                  </button>
+                </div>
+                {visibleSessions.length > 0 && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-zinc-500">Signal session</span>
+                    <select
+                      value={stripSessionId ?? ""}
+                      onChange={(e) => setStripSessionId(Number(e.target.value))}
+                      className="bg-zinc-800 border border-zinc-700 rounded-md px-2 py-1 text-zinc-200"
+                    >
+                      {visibleSessions.map((s) => (
+                        <option key={s.id} value={s.id}>{s.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
               </div>
             )}
             <CandleChart
@@ -127,6 +184,7 @@ export default function LiveTradingPage() {
               tradesBySession={visibleTradesBySession}
               tick={ticks["KRW-ETH"]}
               signals={stripSessionId != null ? (signalsBySession[stripSessionId] ?? []) : []}
+              hiddenSessionIds={hiddenSessionIds}
             />
           </CardContent>
         </Card>
@@ -199,6 +257,7 @@ export default function LiveTradingPage() {
         <CardContent>
           <SessionTable
             sessions={sessions}
+            presets={presets}
             ticks={ticks}
             onStart={startSession}
             onStop={stopSession}
