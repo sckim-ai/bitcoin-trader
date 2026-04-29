@@ -12,7 +12,7 @@ import { useLiveTradingStore } from "../stores/liveTradingStore";
 
 const defaultRangeStart = (): string => {
   const d = new Date();
-  d.setDate(d.getDate() - 7);
+  d.setMonth(d.getMonth() - 3);
   return d.toISOString().slice(0, 10);
 };
 
