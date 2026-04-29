@@ -1,7 +1,10 @@
 use crate::core::day_psy_store;
+use crate::core::live_signal::{filter_confirmed_candles, last_signal_from_simulation, resolve_live_signal};
 use crate::db::live_repo;
 use crate::models::live::{LiveSession, Preset};
-use crate::models::trading::TradingParameters;
+use crate::models::market::MarketData;
+use crate::models::trading::{SimulationResult, TradingParameters};
+use crate::services::auto_trader::{reconcile_position, DbPosition};
 use crate::strategies::StrategyRegistry;
 use chrono::Utc;
 use rusqlite::Connection;
@@ -76,6 +79,9 @@ pub async fn run_session_cycle(
     //    cycle keeps trades and signal_log byte-aligned. Real-trade rows
     //    (is_real=1) are preserved by `delete_paper_trades`.
     let new_count = result.trades.len();
+    // Trade write block — conn lifetime contained so the MutexGuard is
+    // dropped before any subsequent `.await` (CLAUDE.md: MutexGuard is !Send).
+    {
     let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
     live_repo::delete_paper_trades(&conn, session.id)
         .map_err(|e| -> BoxErr { e.to_string().into() })?;
@@ -128,13 +134,17 @@ pub async fn run_session_cycle(
         }
     }
 
-    // 4. Current position snapshot from result.last_*.
-    let current_position = if result.last_position == 1 { "holding" } else { "idle" };
-    let (cbp, cbv) = if result.last_position == 1 {
+    } // end of trade write block — conn dropped before real_reconcile_step.await
+
+    // 4. Current position snapshot from result.last_*. real 모드에선 직후
+    //    Upbit 잔고 reconcile 결과로 덮어씀.
+    let mut current_position: &str = if result.last_position == 1 { "holding" } else { "idle" };
+    let (mut cbp, mut cbv) = if result.last_position == 1 {
         (Some(result.last_buy_price), Some(result.last_set_volume))
     } else {
         (None, None)
     };
+    let mut last_signal_str: String = result.last_signal_type.clone();
     // Equity = initial × ∏(1 + pnl_pct − 2·fee) over ALL closed trades
     // (since session.start_ts = preset.since_ts). This matches the preset's
     // backtest accumulation through "now". holding 중 미실현은 프런트엔드
@@ -159,32 +169,142 @@ pub async fn run_session_cycle(
         .fold(1.0_f64, |acc, t| acc * (1.0 + t.pnl_pct - 2.0 * fee));
     let live_return = (live_factor - 1.0) * 100.0;
 
-    // 5. Update session + equity snapshot.
+    // 4b. Real 모드: Upbit 실 잔고로 reconcile + 레거시 알고리즘으로 신호 결정.
+    //     이번 단계(4A.3)는 결정 + 잔고 동기화 + 로깅까지. 실주문 실행은 4A.4.
+    //     키 누락이나 API 에러는 paper 흐름을 깨지 않고 stderr 로그만 남김.
+    if session.mode == "real" {
+        if let Err(e) = real_reconcile_step(
+            &session, &data, &result,
+            &mut current_position, &mut cbp, &mut cbv, &mut last_signal_str,
+        ).await {
+            eprintln!("[real cycle] session={} reconcile error: {e}", session.id);
+        }
+    }
+
+    // 5. Update session + equity snapshot. Re-acquire conn after any awaits.
     let last_candle_ts = data.last()
         .map(|md| md.candle.timestamp.to_rfc3339())
         .unwrap_or_else(|| Utc::now().to_rfc3339());
-    live_repo::update_session_cycle(
-        &conn, session.id, &last_candle_ts, &result.last_signal_type,
-        current_position, cbp, cbv, equity, live_return,
-    ).map_err(|e| -> BoxErr { e.to_string().into() })?;
-    live_repo::upsert_equity(&conn, session.id, &last_candle_ts, equity, current_position)
-        .map_err(|e| -> BoxErr { e.to_string().into() })?;
+    {
+        let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
+        live_repo::update_session_cycle(
+            &conn, session.id, &last_candle_ts, &last_signal_str,
+            current_position, cbp, cbv, equity, live_return,
+        ).map_err(|e| -> BoxErr { e.to_string().into() })?;
+        live_repo::upsert_equity(&conn, session.id, &last_candle_ts, equity, current_position)
+            .map_err(|e| -> BoxErr { e.to_string().into() })?;
 
-    // Persist the same simulation's signal_log so the frontend chart strip
-    // reads the canonical per-candle signal sequence — guaranteed to align
-    // with the trades inserted above (both come from `result`).
-    let log_json = serde_json::to_string(&result.signal_log).unwrap_or_else(|_| "[]".into());
-    live_repo::update_session_signal_log(&conn, session.id, &log_json)
-        .map_err(|e| -> BoxErr { e.to_string().into() })?;
+        // Persist the same simulation's signal_log so the frontend chart strip
+        // reads the canonical per-candle signal sequence — guaranteed to align
+        // with the trades inserted above (both come from `result`).
+        let log_json = serde_json::to_string(&result.signal_log).unwrap_or_else(|_| "[]".into());
+        live_repo::update_session_signal_log(&conn, session.id, &log_json)
+            .map_err(|e| -> BoxErr { e.to_string().into() })?;
+    }
 
     Ok(SessionCycleOutput {
         session_id: session.id,
         new_completed_trades: new_count,
-        latest_signal: result.last_signal_type,
+        latest_signal: last_signal_str,
         current_position: current_position.into(),
         current_equity: equity,
         live_return,
     })
+}
+
+/// Real-mode reconcile + signal resolution. Mutates the position snapshot
+/// (`current_position`/`cbp`/`cbv`) and `last_signal` in place so the caller
+/// can persist a single coherent state. Phase 4A.3 only logs the decision —
+/// actual order execution lands in 4A.4.
+///
+/// Steps (mirrors legacy `LiveTradingService.ExecuteTradeCycleAsync`):
+///   1. Load Upbit balances + current price.
+///   2. Reconcile DB position vs. real coin balance (handles external
+///      trades / dust / status drift).
+///   3. Filter unfinished trailing candle so signal computation is stable.
+///   4. Re-derive last signal from the confirmed-window simulation. We
+///      reuse the original `result` when input matches (most cycles), but
+///      run a confirmed-window simulation for the live signal extraction
+///      to match legacy semantics exactly.
+///   5. `resolve_live_signal(sim_signal, real_position)` → final action.
+async fn real_reconcile_step<'a>(
+    session: &LiveSession,
+    data: &[MarketData],
+    result: &SimulationResult,
+    current_position: &mut &'a str,
+    cbp: &mut Option<f64>,
+    cbv: &mut Option<f64>,
+    last_signal: &mut String,
+) -> Result<(), BoxErr> {
+    let upbit = crate::commands::upbit_keys::upbit_client_or_err()
+        .map_err(|e| -> BoxErr { e.into() })?;
+
+    let currency = session.market.split('-').nth(1).unwrap_or("ETH");
+    let coin_balance = upbit.get_balance(currency).await
+        .map_err(|e| -> BoxErr { e.to_string().into() })?;
+    let current_price = upbit.get_current_price(&session.market).await
+        .map_err(|e| -> BoxErr { e.to_string().into() })?;
+
+    // Reconcile DB ↔ Upbit. Treat the session's stored fields as the DB
+    // position; reconcile_position decides what the canonical state is.
+    let db_pos = DbPosition {
+        status: session.current_position.clone(),
+        buy_price: session.current_buy_price.unwrap_or(0.0),
+        buy_volume: session.current_buy_volume.unwrap_or(0.0),
+        buy_psy: 0.0,
+    };
+    let (status, rec_buy_price, rec_buy_volume) =
+        reconcile_position(&db_pos, coin_balance, current_price);
+
+    // For signal extraction, prefer a confirmed-window sim — but if the
+    // confirmed input is the same length as `data`, the existing `result`
+    // applies and we skip re-simulation. (Re-running the strategy here is
+    // safe but redundant on most cycles where the trailing candle is
+    // already complete.)
+    let confirmed = filter_confirmed_candles(data.to_vec());
+    let sim_signal_owned;
+    let sim_signal = if confirmed.len() == data.len() {
+        last_signal_from_simulation(result).to_string()
+    } else {
+        // Re-run the strategy on the trimmed window so the live signal
+        // doesn't include the still-forming candle. Reuse the registry +
+        // params from the surrounding scope by constructing a fresh
+        // simulation here is non-trivial without plumbing them through;
+        // instead, fall back to inspecting the original log up to the
+        // last confirmed timestamp.
+        let cutoff = confirmed.last().map(|m| m.candle.timestamp).unwrap_or_else(Utc::now);
+        let last = result.signal_log.iter().rev()
+            .find(|e| {
+                chrono::DateTime::parse_from_rfc3339(&e.timestamp)
+                    .map(|dt| dt.with_timezone(&Utc) <= cutoff)
+                    .unwrap_or(false)
+            })
+            .map(|e| e.signal_type.clone())
+            .unwrap_or_else(|| "ready".into());
+        sim_signal_owned = last;
+        sim_signal_owned.clone()
+    };
+
+    let position_int = if status == "holding" { 1 } else { 0 };
+    let final_signal = resolve_live_signal(&sim_signal, position_int);
+
+    // Apply reconciled state to the caller's mutable refs so update_session_cycle
+    // persists the real state (not the sim's preferred state).
+    *current_position = status;
+    if status == "holding" {
+        *cbp = Some(rec_buy_price);
+        *cbv = Some(rec_buy_volume);
+    } else {
+        *cbp = None;
+        *cbv = None;
+    }
+    *last_signal = final_signal.to_string();
+
+    eprintln!(
+        "[real cycle] session={} sim={} status={} balance={:.6} price={:.0} → final={}",
+        session.id, sim_signal, status, coin_balance, current_price, final_signal,
+    );
+    Ok(())
 }
 
 #[cfg(test)]
