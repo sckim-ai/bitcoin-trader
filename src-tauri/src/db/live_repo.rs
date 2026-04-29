@@ -151,6 +151,55 @@ pub fn set_session_status(conn: &Connection, id: i64, status: &str) -> Result<us
     )
 }
 
+/// Switch a session between paper and real modes. Caller is responsible for
+/// validating multi-real=1 and that API keys are configured before promoting.
+pub fn set_session_mode(conn: &Connection, id: i64, mode: &str) -> Result<usize> {
+    conn.execute(
+        "UPDATE live_sessions SET mode = ?1 WHERE id = ?2",
+        params![mode, id],
+    )
+}
+
+/// Count sessions currently in real mode, regardless of running/stopped status.
+/// Used to enforce the multi-real=1 invariant: even a stopped real session
+/// occupies the "slot" since its prior position/balance state is on Upbit.
+pub fn count_real_sessions(conn: &Connection, exclude_id: Option<i64>) -> Result<i64> {
+    let n: i64 = match exclude_id {
+        Some(id) => conn.query_row(
+            "SELECT COUNT(*) FROM live_sessions WHERE mode = 'real' AND id != ?1",
+            [id],
+            |r| r.get(0),
+        )?,
+        None => conn.query_row(
+            "SELECT COUNT(*) FROM live_sessions WHERE mode = 'real'",
+            [],
+            |r| r.get(0),
+        )?,
+    };
+    Ok(n)
+}
+
+/// Stop every running real session. Returns the affected ids so the caller
+/// can emit per-session events. Mode stays 'real' — the user explicitly
+/// promoted these and we don't want to silently demote on emergency stop.
+pub fn stop_all_real_sessions(conn: &Connection) -> Result<Vec<i64>> {
+    let mut stmt = conn.prepare(
+        "SELECT id FROM live_sessions WHERE mode = 'real' AND status = 'running'",
+    )?;
+    let ids: Vec<i64> = stmt
+        .query_map([], |r| r.get::<_, i64>(0))?
+        .collect::<Result<Vec<_>>>()?;
+    drop(stmt);
+    if !ids.is_empty() {
+        conn.execute(
+            "UPDATE live_sessions SET status = 'stopped'
+             WHERE mode = 'real' AND status = 'running'",
+            [],
+        )?;
+    }
+    Ok(ids)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn update_session_cycle(
     conn: &Connection,
@@ -411,6 +460,48 @@ mod tests {
         assert_eq!(list_running_sessions(&conn).unwrap().len(), 1);
         set_session_status(&conn, sid, "stopped").unwrap();
         assert_eq!(list_running_sessions(&conn).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_set_session_mode_and_count() {
+        let conn = setup_db();
+        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None, None, None).unwrap();
+        let s1 = insert_session(&conn, 1, "A", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z").unwrap();
+        let s2 = insert_session(&conn, 1, "B", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z").unwrap();
+
+        assert_eq!(count_real_sessions(&conn, None).unwrap(), 0);
+
+        set_session_mode(&conn, s1, "real").unwrap();
+        assert_eq!(count_real_sessions(&conn, None).unwrap(), 1);
+        // Excluding s1 from the count = "any OTHER real session?"
+        assert_eq!(count_real_sessions(&conn, Some(s1)).unwrap(), 0);
+
+        set_session_mode(&conn, s2, "real").unwrap();
+        assert_eq!(count_real_sessions(&conn, None).unwrap(), 2);
+        assert_eq!(count_real_sessions(&conn, Some(s1)).unwrap(), 1);
+    }
+
+    #[test]
+    fn test_stop_all_real_sessions() {
+        let conn = setup_db();
+        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None, None, None).unwrap();
+        let s1 = insert_session(&conn, 1, "A", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z").unwrap();
+        let s2 = insert_session(&conn, 1, "B", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z").unwrap();
+
+        // s1 = running real, s2 = running paper, s3 = stopped real
+        let s3 = insert_session(&conn, 1, "C", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z").unwrap();
+        set_session_mode(&conn, s1, "real").unwrap();
+        set_session_status(&conn, s1, "running").unwrap();
+        set_session_status(&conn, s2, "running").unwrap();
+        set_session_mode(&conn, s3, "real").unwrap();
+        // s3 stays 'stopped'
+
+        let stopped = stop_all_real_sessions(&conn).unwrap();
+        assert_eq!(stopped, vec![s1]); // only running real
+        assert_eq!(get_session(&conn, s1).unwrap().unwrap().status, "stopped");
+        assert_eq!(get_session(&conn, s2).unwrap().unwrap().status, "running"); // paper untouched
+        // mode preserved on s1
+        assert_eq!(get_session(&conn, s1).unwrap().unwrap().mode, "real");
     }
 
     #[test]

@@ -11,6 +11,10 @@ interface Props {
   onStart: (id: number) => void;
   onStop: (id: number) => void;
   onDelete: (id: number) => void;
+  /** Open the paper→real confirm dialog for the given session. */
+  onPromoteRequest: (session: LiveSession) => void;
+  /** Demote a real session back to paper (no confirm — reversible direction). */
+  onDemote: (id: number) => void;
 }
 
 function pctColor(v: number, neutral = "text-zinc-500") {
@@ -21,7 +25,9 @@ function fmtPct(v: number) {
   return `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
 }
 
-export default function SessionTable({ sessions, presets, ticks, onStart, onStop, onDelete }: Props) {
+export default function SessionTable({
+  sessions, presets, ticks, onStart, onStop, onDelete, onPromoteRequest, onDemote,
+}: Props) {
   const hiddenSessionIds = useLiveTradingStore((s) => s.hiddenSessionIds);
   const toggleSessionVisibility = useLiveTradingStore((s) => s.toggleSessionVisibility);
   const presetById = new Map(presets.map((p) => [p.id, p]));
@@ -39,6 +45,7 @@ export default function SessionTable({ sessions, presets, ticks, onStart, onStop
           <th className="text-center py-2 w-10">Show</th>
           <th className="text-left">Label</th>
           <th className="text-left">Market</th>
+          <th className="text-left">Mode</th>
           <th className="text-left">Status</th>
           <th className="text-left">Position</th>
           <th className="text-right">Equity</th>
@@ -80,6 +87,11 @@ export default function SessionTable({ sessions, presets, ticks, onStart, onStop
               </td>
               <td className="font-medium text-zinc-200">{s.label}</td>
               <td className="text-zinc-400">{s.market}</td>
+              <td>
+                <Badge variant={s.mode === "real" ? "amber" : "default"}>
+                  {s.mode === "real" ? "REAL" : "paper"}
+                </Badge>
+              </td>
               <td>
                 <Badge variant={s.status === "running" ? "green" : "default"}>
                   {s.status}
@@ -130,6 +142,25 @@ export default function SessionTable({ sessions, presets, ticks, onStart, onStop
                     <Button size="sm" variant="success" onClick={() => onStart(s.id)}>Start</Button>
                   ) : (
                     <Button size="sm" variant="secondary" onClick={() => onStop(s.id)}>Stop</Button>
+                  )}
+                  {s.mode === "paper" ? (
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      onClick={() => onPromoteRequest(s)}
+                      title="실거래 모드로 전환 (확인 다이얼로그 표시)"
+                    >
+                      → Real
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => onDemote(s.id)}
+                      title="paper 모드로 되돌림"
+                    >
+                      → Paper
+                    </Button>
                   )}
                   <Button size="sm" variant="danger" onClick={() => onDelete(s.id)}>Del</Button>
                 </div>

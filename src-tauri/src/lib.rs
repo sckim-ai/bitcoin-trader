@@ -153,6 +153,8 @@ mod app {
                 live_trading::list_session_trades,
                 live_trading::get_session_signal_log,
                 live_trading::refresh_session_cycle,
+                live_trading::toggle_session_mode,
+                live_trading::emergency_stop_all_real,
                 upbit_keys::save_upbit_keys,
                 upbit_keys::get_upbit_key_status,
                 upbit_keys::clear_upbit_keys,

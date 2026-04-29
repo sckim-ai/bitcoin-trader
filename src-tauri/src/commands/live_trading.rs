@@ -227,6 +227,77 @@ pub fn delete_session(id: i64, state: State<'_, AppState>) -> Result<(), String>
     Ok(())
 }
 
+// ─── Mode toggle (paper ↔ real) — Phase 4A.2 ───
+//
+// Multi-real=1 invariant: at most one session may have mode='real' at any
+// time. This protects the user from concurrent real sessions racing for the
+// same Upbit balance. The check uses `count_real_sessions(exclude=self)` so
+// flipping a session that's already 'real' to 'paper' (and back) is allowed.
+//
+// API key check on promotion: a real session is useless without keys, and
+// silent failure on first cycle is the worst UX. We surface the missing-key
+// case at the toggle moment with a clear message pointing to Settings.
+
+#[derive(serde::Deserialize)]
+pub struct ToggleSessionModeArgs {
+    pub id: i64,
+    pub mode: String, // "paper" or "real"
+}
+
+#[tauri::command]
+pub fn toggle_session_mode(
+    args: ToggleSessionModeArgs,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let mode = args.mode.as_str();
+    if mode != "paper" && mode != "real" {
+        return Err(format!("invalid mode: {mode} (expected 'paper' or 'real')"));
+    }
+
+    if mode == "real" {
+        // Verify keys exist before promotion.
+        let (a, s, _) = crate::commands::upbit_keys::load_upbit_keys();
+        if a.is_none() || s.is_none() {
+            return Err(
+                "Upbit API keys not configured. Open Settings → Upbit API Keys to save them first."
+                    .into(),
+            );
+        }
+    }
+
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+
+    if mode == "real" {
+        let other_real = live_repo::count_real_sessions(&conn, Some(args.id))
+            .map_err(|e| e.to_string())?;
+        if other_real > 0 {
+            return Err(format!(
+                "Multi-real not allowed: {other_real} other session(s) already in real mode. \
+                 Demote one to paper first."
+            ));
+        }
+    }
+
+    live_repo::set_session_mode(&conn, args.id, mode).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Stop every running real session immediately. Returns the affected ids.
+/// Mode is preserved (still 'real') — the user explicitly chose those, and
+/// silent demote on emergency would be surprising. To revert mode, use
+/// `toggle_session_mode` afterward.
+#[tauri::command]
+pub fn emergency_stop_all_real(state: State<'_, AppState>) -> Result<Vec<i64>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let ids = live_repo::stop_all_real_sessions(&conn).map_err(|e| e.to_string())?;
+    drop(conn);
+    let mut session_set = state.paper_session_ids.lock().map_err(|e| e.to_string())?;
+    for id in &ids {
+        session_set.remove(id);
+    }
+    Ok(ids)
+}
+
 #[tauri::command]
 pub fn list_session_trades(session_id: i64, state: State<'_, AppState>) -> Result<Vec<LiveTrade>, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;

@@ -11,6 +11,8 @@ import {
   stopSession as apiStop,
   deleteSession as apiDelete,
   deletePreset as apiDeletePreset,
+  toggleSessionMode as apiToggleMode,
+  emergencyStopAllReal as apiEmergencyStop,
   subscribeTicks,
 } from "../lib/live";
 import { getMarketData, autoUpdateAllMarkets } from "../lib/api";
@@ -45,6 +47,12 @@ interface LiveTradingState {
   stopSession: (id: number) => Promise<void>;
   deleteSession: (id: number) => Promise<void>;
   deletePreset: (id: number) => Promise<void>;
+  /// Promote (paper → real) or demote (real → paper). Backend enforces
+  /// multi-real=1 and API key presence; errors propagate to the caller.
+  toggleSessionMode: (id: number, mode: "paper" | "real") => Promise<void>;
+  /// Stop all running real sessions. Returns affected ids for the caller
+  /// to surface in a toast.
+  emergencyStopAllReal: () => Promise<number[]>;
 
   toggleSessionVisibility: (id: number) => void;
   setAllSessionsVisible: (visible: boolean) => void;
@@ -193,6 +201,17 @@ export const useLiveTradingStore = create<LiveTradingState>((set, get) => ({
   deletePreset: async (id) => {
     await apiDeletePreset(id);
     await get().refreshPresets();
+  },
+
+  toggleSessionMode: async (id, mode) => {
+    await apiToggleMode(id, mode);
+    await get().refreshSessions();
+  },
+
+  emergencyStopAllReal: async () => {
+    const ids = await apiEmergencyStop();
+    await get().refreshSessions();
+    return ids;
   },
 
   subscribeEvents: async () => {

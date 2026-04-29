@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "../components/ui/Button";
 import { Card, CardContent, CardHeader } from "../components/ui/Card";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, AlertOctagon } from "lucide-react";
 import SessionTable from "../components/live/SessionTable";
 import NewSessionDialog from "../components/live/NewSessionDialog";
+import PromoteRealDialog from "../components/live/PromoteRealDialog";
 import LiveKpiBar from "../components/live/LiveKpiBar";
 import CandleChart from "../components/live/CandleChart";
 import { colorFor } from "../components/live/charts/sessionPalette";
-import type { LiveTrade, MarketData } from "../types";
+import type { LiveSession, LiveTrade, MarketData } from "../types";
 import { useLiveTradingStore } from "../stores/liveTradingStore";
 
 const defaultRangeStart = (): string => {
@@ -24,10 +25,51 @@ export default function LiveTradingPage() {
     refreshAll, createSession,
     startSession, stopSession, deleteSession, deletePreset,
     toggleSessionVisibility, setAllSessionsVisible,
+    toggleSessionMode, emergencyStopAllReal,
     subscribeEvents,
     loadMarketData, loadAllSessionTrades, loadSessionSignals,
   } = useLiveTradingStore();
   const [showNew, setShowNew] = useState(false);
+  const [promoteTarget, setPromoteTarget] = useState<LiveSession | null>(null);
+  const [killBusy, setKillBusy] = useState(false);
+
+  const realSessionCount = useMemo(
+    () => sessions.filter((s) => s.mode === "real").length,
+    [sessions],
+  );
+  const runningRealCount = useMemo(
+    () => sessions.filter((s) => s.mode === "real" && s.status === "running").length,
+    [sessions],
+  );
+
+  const handleKillSwitch = async () => {
+    if (!window.confirm(
+      `실거래 세션 ${runningRealCount}개를 즉시 정지합니다. 계속하시겠습니까?\n\n` +
+      `(주의: 미체결 주문은 별도로 취소되지 않습니다 — Phase 4A.5에서 추가 예정)`
+    )) return;
+    setKillBusy(true);
+    try {
+      const ids = await emergencyStopAllReal();
+      if (ids.length > 0) {
+        window.alert(`${ids.length}개 real 세션이 정지되었습니다.`);
+      } else {
+        window.alert("실행 중이던 real 세션이 없었습니다.");
+      }
+    } catch (e) {
+      window.alert(`Emergency stop failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setKillBusy(false);
+    }
+  };
+
+  const handleDemote = async (id: number) => {
+    if (!window.confirm("이 세션을 paper 모드로 되돌립니다. 계속하시겠습니까?")) return;
+    try {
+      await toggleSessionMode(id, "paper");
+    } catch (e) {
+      window.alert(`Demote failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
 
   // Single source of truth for the chart window. Data is filtered to this
   // start before rendering so the chart's auto-fit lands on the user's
@@ -249,10 +291,32 @@ export default function LiveTradingPage() {
 
       <Card>
         <CardHeader className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-zinc-300">Live Trading — Paper Sessions</h3>
-          <Button size="sm" onClick={() => setShowNew(true)} disabled={presets.length === 0}>
-            <Plus size={14} /> New Session
-          </Button>
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-semibold text-zinc-300">
+              Live Trading — Sessions
+            </h3>
+            {realSessionCount > 0 && (
+              <span className="px-1.5 py-0.5 text-[10px] rounded bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                {realSessionCount} REAL
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {runningRealCount > 0 && (
+              <Button
+                size="sm"
+                variant="danger"
+                onClick={handleKillSwitch}
+                disabled={killBusy}
+                title="모든 실거래 세션을 즉시 정지"
+              >
+                <AlertOctagon size={14} /> Kill switch ({runningRealCount})
+              </Button>
+            )}
+            <Button size="sm" onClick={() => setShowNew(true)} disabled={presets.length === 0}>
+              <Plus size={14} /> New Session
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           <SessionTable
@@ -266,6 +330,8 @@ export default function LiveTradingPage() {
                 deleteSession(id);
               }
             }}
+            onPromoteRequest={(s) => setPromoteTarget(s)}
+            onDemote={handleDemote}
           />
         </CardContent>
       </Card>
@@ -277,6 +343,16 @@ export default function LiveTradingPage() {
           onSubmit={async (args) => {
             await createSession(args);
             setShowNew(false);
+          }}
+        />
+      )}
+
+      {promoteTarget && (
+        <PromoteRealDialog
+          session={promoteTarget}
+          onClose={() => setPromoteTarget(null)}
+          onConfirm={async () => {
+            await toggleSessionMode(promoteTarget.id, "real");
           }}
         />
       )}

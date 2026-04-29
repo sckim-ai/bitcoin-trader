@@ -36,6 +36,14 @@ export const stopSession = (id: number): Promise<void> =>
   invoke("stop_session", { id });
 export const deleteSession = (id: number): Promise<void> =>
   invoke("delete_session", { id });
+/// Promote a paper session to real (or demote back to paper). Backend enforces
+/// multi-real=1 and verifies API keys are configured before promoting.
+export const toggleSessionMode = (id: number, mode: "paper" | "real"): Promise<void> =>
+  invoke("toggle_session_mode", { args: { id, mode } });
+/// Stop all running real sessions. Returns the affected session ids.
+/// Mode stays 'real' — only status flips to 'stopped'.
+export const emergencyStopAllReal = (): Promise<number[]> =>
+  invoke("emergency_stop_all_real");
 export const listSessionTrades = (sessionId: number): Promise<LiveTrade[]> =>
   invoke("list_session_trades", { sessionId });
 /// Persisted per-candle signal_log for the session — written by session_engine
