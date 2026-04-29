@@ -56,6 +56,13 @@ export default function PromoteRealDialog({ session, onClose, onConfirm }: Props
           <div><span className="text-zinc-500">Market:</span> <span className="text-zinc-200">{session.market}</span></div>
           <div><span className="text-zinc-500">Initial capital:</span> <span className="text-zinc-200">{session.initial_capital.toLocaleString()} KRW</span></div>
           <div><span className="text-zinc-500">Current position:</span> <span className="text-zinc-200">{session.current_position}</span></div>
+          <div className="border-t border-zinc-700 pt-1 mt-1">
+            <span className="text-zinc-500">Daily safety limits:</span>{" "}
+            <span className="text-rose-300">{session.max_daily_loss_pct}% loss</span>
+            {" · "}
+            <span className="text-rose-300">{session.max_daily_trades} trades</span>
+            <span className="text-zinc-600"> (auto-stop)</span>
+          </div>
         </div>
 
         <div className="space-y-2 text-xs">

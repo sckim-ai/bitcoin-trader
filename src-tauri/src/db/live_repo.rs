@@ -112,7 +112,7 @@ pub fn get_session(conn: &Connection, id: i64) -> Result<Option<LiveSession>> {
         "SELECT id, user_id, label, preset_id, market, mode, status, initial_capital,
                 start_ts, real_started_at, last_cycle_ts, last_signal,
                 current_position, current_buy_price, current_buy_volume, current_equity,
-                live_return, created_at
+                live_return, max_daily_loss_pct, max_daily_trades, created_at
          FROM live_sessions WHERE id = ?1",
         [id],
         row_to_session,
@@ -125,7 +125,7 @@ pub fn list_sessions(conn: &Connection, user_id: i64) -> Result<Vec<LiveSession>
         "SELECT id, user_id, label, preset_id, market, mode, status, initial_capital,
                 start_ts, real_started_at, last_cycle_ts, last_signal,
                 current_position, current_buy_price, current_buy_volume, current_equity,
-                live_return, created_at
+                live_return, max_daily_loss_pct, max_daily_trades, created_at
          FROM live_sessions WHERE user_id = ?1 ORDER BY created_at DESC",
     )?;
     let rows = stmt.query_map([user_id], row_to_session)?;
@@ -137,7 +137,7 @@ pub fn list_running_sessions(conn: &Connection) -> Result<Vec<LiveSession>> {
         "SELECT id, user_id, label, preset_id, market, mode, status, initial_capital,
                 start_ts, real_started_at, last_cycle_ts, last_signal,
                 current_position, current_buy_price, current_buy_volume, current_equity,
-                live_return, created_at
+                live_return, max_daily_loss_pct, max_daily_trades, created_at
          FROM live_sessions WHERE status = 'running'",
     )?;
     let rows = stmt.query_map([], row_to_session)?;
@@ -287,7 +287,9 @@ fn row_to_session(row: &rusqlite::Row) -> Result<LiveSession> {
         current_buy_volume: row.get(14)?,
         current_equity: row.get(15)?,
         live_return: row.get(16)?,
-        created_at: row.get(17)?,
+        max_daily_loss_pct: row.get(17)?,
+        max_daily_trades: row.get(18)?,
+        created_at: row.get(19)?,
     })
 }
 
@@ -347,6 +349,48 @@ pub fn count_completed_trades(conn: &Connection, session_id: i64) -> Result<usiz
         |r| r.get(0),
     )?;
     Ok(n as usize)
+}
+
+// ─── Safety limits (Phase 4A.6) ───
+
+/// Sum of pnl on is_real=1 sells since UTC midnight today, divided by
+/// `initial_capital * 100` to express as a percentage. Negative when in
+/// loss. Used by the daily-loss circuit breaker.
+pub fn today_realized_pnl_pct(
+    conn: &Connection,
+    session_id: i64,
+    initial_capital: f64,
+) -> Result<f64> {
+    if initial_capital <= 0.0 {
+        return Ok(0.0);
+    }
+    // SQLite "now" is UTC; date('now') gives YYYY-MM-DD. We compare against
+    // the date prefix of `ts` (RFC3339 begins with YYYY-MM-DD). Both strings
+    // are UTC-anchored so prefix comparison is correct.
+    let today: String = conn.query_row("SELECT date('now')", [], |r| r.get(0))?;
+    let pnl_sum: Option<f64> = conn.query_row(
+        "SELECT COALESCE(SUM(pnl), 0)
+           FROM live_trades
+          WHERE session_id = ?1 AND side = 'sell' AND is_real = 1
+            AND substr(ts, 1, 10) = ?2",
+        params![session_id, today],
+        |r| r.get(0),
+    )?;
+    Ok(pnl_sum.unwrap_or(0.0) / initial_capital * 100.0)
+}
+
+/// Number of is_real=1 sells today (UTC). Used by the per-day trade-count
+/// circuit breaker.
+pub fn today_real_trades_count(conn: &Connection, session_id: i64) -> Result<i64> {
+    let today: String = conn.query_row("SELECT date('now')", [], |r| r.get(0))?;
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM live_trades
+          WHERE session_id = ?1 AND side = 'sell' AND is_real = 1
+            AND substr(ts, 1, 10) = ?2",
+        params![session_id, today],
+        |r| r.get(0),
+    )?;
+    Ok(n)
 }
 
 // ─── Pending Orders (Phase 4A.5) ───
@@ -485,6 +529,8 @@ mod tests {
         conn.execute_batch(s9).unwrap();
         let s10 = include_str!("../../migrations/010_pending_orders.sql");
         conn.execute_batch(s10).unwrap();
+        let s11 = include_str!("../../migrations/011_safety_limits.sql");
+        conn.execute_batch(s11).unwrap();
         conn
     }
 

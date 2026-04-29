@@ -213,6 +213,10 @@ export interface LiveSession {
   current_equity: number | null;
   /** Cumulative return % from real_started_at onward (closed trades only). */
   live_return: number;
+  /** Daily realized loss % threshold — auto-stop when today's loss exceeds. */
+  max_daily_loss_pct: number;
+  /** Daily real-sell count threshold — auto-stop on reach. */
+  max_daily_trades: number;
   created_at: string;
 }
 

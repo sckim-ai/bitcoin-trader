@@ -239,7 +239,37 @@ async fn real_reconcile_step<'a>(
     let upbit = crate::commands::upbit_keys::upbit_client_or_err()
         .map_err(|e| -> BoxErr { e.into() })?;
 
-    // 0. Reconcile any leftover wait-state orders FIRST so this cycle's
+    // 0a. Daily safety circuit breakers (Phase 4A.6).
+    //     Checked BEFORE pending reconcile / balance fetch so a tripped
+    //     limit immediately stops the session without making more API calls.
+    {
+        let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
+        let today_pnl_pct = live_repo::today_realized_pnl_pct(
+            &conn, session.id, session.initial_capital,
+        ).map_err(|e| -> BoxErr { e.to_string().into() })?;
+        let today_count = live_repo::today_real_trades_count(&conn, session.id)
+            .map_err(|e| -> BoxErr { e.to_string().into() })?;
+
+        // Loss threshold is negative; tripped when realized loss is *worse*.
+        let loss_tripped = today_pnl_pct <= session.max_daily_loss_pct;
+        let count_tripped = today_count >= session.max_daily_trades as i64;
+        if loss_tripped || count_tripped {
+            let reason = if loss_tripped {
+                format!("daily loss {:.2}% ≤ limit {:.2}%",
+                    today_pnl_pct, session.max_daily_loss_pct)
+            } else {
+                format!("daily trade count {} ≥ limit {}",
+                    today_count, session.max_daily_trades)
+            };
+            eprintln!("[real cycle] session={} CIRCUIT BREAKER tripped: {}", session.id, reason);
+            live_repo::set_session_status(&conn, session.id, "stopped")
+                .map_err(|e| -> BoxErr { e.to_string().into() })?;
+            // Position state untouched — user can review and decide.
+            return Ok(());
+        }
+    }
+
+    // 0b. Reconcile any leftover wait-state orders FIRST so this cycle's
     //    balance fetch reflects the latest fills. (Phase 4A.5)
     if let Err(e) = crate::services::pending_order_tracker::reconcile_pending_orders(db, &upbit).await {
         eprintln!("[real cycle] session={} pending reconcile error: {e}", session.id);
@@ -439,6 +469,7 @@ mod tests {
         conn.execute_batch(include_str!("../../migrations/008_session_signal_log.sql")).unwrap();
         conn.execute_batch(include_str!("../../migrations/009_baseline_metrics.sql")).unwrap();
         conn.execute_batch(include_str!("../../migrations/010_pending_orders.sql")).unwrap();
+        conn.execute_batch(include_str!("../../migrations/011_safety_limits.sql")).unwrap();
         conn
     }
 

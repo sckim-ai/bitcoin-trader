@@ -88,9 +88,19 @@ export default function SessionTable({
               <td className="font-medium text-zinc-200">{s.label}</td>
               <td className="text-zinc-400">{s.market}</td>
               <td>
-                <Badge variant={s.mode === "real" ? "amber" : "default"}>
-                  {s.mode === "real" ? "REAL" : "paper"}
-                </Badge>
+                <div className="flex flex-col gap-0.5 leading-tight">
+                  <Badge variant={s.mode === "real" ? "amber" : "default"}>
+                    {s.mode === "real" ? "REAL" : "paper"}
+                  </Badge>
+                  {s.mode === "real" && (
+                    <span
+                      className="text-[10px] text-zinc-500 font-data"
+                      title={`Auto-stop when today's loss ≤ ${s.max_daily_loss_pct}% or sells reach ${s.max_daily_trades}`}
+                    >
+                      ≤{s.max_daily_loss_pct}% / {s.max_daily_trades}t
+                    </span>
+                  )}
+                </div>
               </td>
               <td>
                 <Badge variant={s.status === "running" ? "green" : "default"}>

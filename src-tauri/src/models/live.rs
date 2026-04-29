@@ -95,6 +95,12 @@ pub struct LiveSession {
     /// Distinct from preset.baseline_return: this is the live track record,
     /// not the static backtest result.
     pub live_return: f64,
+    /// Auto-stop threshold: if today's realized loss% drops below this,
+    /// the session is moved to status='stopped'. Negative number (e.g. -10.0).
+    pub max_daily_loss_pct: f64,
+    /// Auto-stop threshold: if today's is_real=1 sell count reaches this,
+    /// the session is stopped. Defends against runaway loops.
+    pub max_daily_trades: i32,
     pub created_at: String,
 }
 
