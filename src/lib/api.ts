@@ -302,6 +302,9 @@ export interface UpbitKeyStatus {
   has_secret: boolean;
   /** "keyring" / "env" / "none" — tells the UI where active keys come from. */
   source: "keyring" | "env" | "none";
+  /** Surfaced when keyring read fails so we can show "why" instead of just "Not configured". */
+  access_error: string | null;
+  secret_error: string | null;
 }
 
 export async function saveUpbitKeys(accessKey: string, secretKey: string): Promise<void> {

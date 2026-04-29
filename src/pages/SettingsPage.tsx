@@ -33,7 +33,13 @@ export default function SettingsPage() {
   const [keyBusy, setKeyBusy] = useState(false);
 
   const refreshKeyStatus = async () => {
-    try { setKeyStatus(await getUpbitKeyStatus()); } catch { /* desktop-only */ }
+    try {
+      setKeyStatus(await getUpbitKeyStatus());
+    } catch (e) {
+      // PWA fallback path — keep the badge in null/loading state but surface
+      // the reason once so a developer can spot the protocol mismatch.
+      console.warn("getUpbitKeyStatus failed:", e);
+    }
   };
   useEffect(() => { refreshKeyStatus(); }, []);
 
@@ -157,18 +163,26 @@ export default function SettingsPage() {
             실거래 자동매매에 사용. OS 키체인(Windows Credential Manager / macOS Keychain / Linux Secret Service)에 저장되며 코드/설정 파일에는 남지 않습니다.
           </p>
 
-          {/* Status badge */}
-          <div className="flex items-center gap-2 text-xs">
-            {keyStatus == null ? (
-              <span className="text-zinc-500">Loading…</span>
-            ) : keyStatus.has_access && keyStatus.has_secret ? (
-              <span className="px-2 py-0.5 rounded bg-emerald-900/40 text-emerald-300 border border-emerald-800">
-                Configured · source: <span className="font-data">{keyStatus.source}</span>
-              </span>
-            ) : (
-              <span className="px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-700">
-                Not configured
-              </span>
+          {/* Status badge + diagnostic */}
+          <div className="space-y-1 text-xs">
+            <div className="flex items-center gap-2">
+              {keyStatus == null ? (
+                <span className="text-zinc-500">Loading…</span>
+              ) : keyStatus.has_access && keyStatus.has_secret ? (
+                <span className="px-2 py-0.5 rounded bg-emerald-900/40 text-emerald-300 border border-emerald-800">
+                  Configured · source: <span className="font-data">{keyStatus.source}</span>
+                </span>
+              ) : (
+                <span className="px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-700">
+                  Not configured
+                </span>
+              )}
+            </div>
+            {keyStatus?.access_error && (
+              <div className="text-rose-400 break-all">access read error: {keyStatus.access_error}</div>
+            )}
+            {keyStatus?.secret_error && (
+              <div className="text-rose-400 break-all">secret read error: {keyStatus.secret_error}</div>
             )}
           </div>
 
