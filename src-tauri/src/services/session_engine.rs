@@ -239,6 +239,12 @@ async fn real_reconcile_step<'a>(
     let upbit = crate::commands::upbit_keys::upbit_client_or_err()
         .map_err(|e| -> BoxErr { e.into() })?;
 
+    // 0. Reconcile any leftover wait-state orders FIRST so this cycle's
+    //    balance fetch reflects the latest fills. (Phase 4A.5)
+    if let Err(e) = crate::services::pending_order_tracker::reconcile_pending_orders(db, &upbit).await {
+        eprintln!("[real cycle] session={} pending reconcile error: {e}", session.id);
+    }
+
     let currency = session.market.split('-').nth(1).unwrap_or("ETH");
     let coin_balance = upbit.get_balance(currency).await
         .map_err(|e| -> BoxErr { e.to_string().into() })?;
@@ -334,6 +340,16 @@ async fn real_reconcile_step<'a>(
                     booked_price * booked_volume * fee_rate,
                     "real_buy", None, None, true, // is_real=1
                 ).map_err(|e| -> BoxErr { e.to_string().into() })?;
+                // Track each chunk in pending_orders so the next cycle's
+                // tracker can confirm/cancel any that came back as 'wait'.
+                for o in &result.orders {
+                    let initial = if o.is_done() { "done" } else { "wait" };
+                    let _ = live_repo::insert_pending_order(
+                        &conn, &o.uuid, session.id, "bid", &session.market,
+                        &o.ord_type, None, order_krw / result.orders.len() as f64,
+                        &now_ts, initial,
+                    );
+                }
                 drop(conn);
 
                 applied_status = "holding";
@@ -371,6 +387,14 @@ async fn real_reconcile_step<'a>(
                     booked_price * booked_volume * fee_rate,
                     "real_sell", Some(pnl), Some(pnl_pct), true, // is_real=1
                 ).map_err(|e| -> BoxErr { e.to_string().into() })?;
+                for o in &result.orders {
+                    let initial = if o.is_done() { "done" } else { "wait" };
+                    let _ = live_repo::insert_pending_order(
+                        &conn, &o.uuid, session.id, "ask", &session.market,
+                        &o.ord_type, None, coin_balance / result.orders.len() as f64,
+                        &now_ts, initial,
+                    );
+                }
                 drop(conn);
 
                 applied_status = "idle";
@@ -414,6 +438,7 @@ mod tests {
         conn.execute_batch(include_str!("../../migrations/007_preset_context.sql")).unwrap();
         conn.execute_batch(include_str!("../../migrations/008_session_signal_log.sql")).unwrap();
         conn.execute_batch(include_str!("../../migrations/009_baseline_metrics.sql")).unwrap();
+        conn.execute_batch(include_str!("../../migrations/010_pending_orders.sql")).unwrap();
         conn
     }
 

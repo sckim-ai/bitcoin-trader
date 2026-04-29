@@ -14,6 +14,7 @@ fn setup_db() -> Connection {
     conn.execute_batch(include_str!("../migrations/007_preset_context.sql")).unwrap();
     conn.execute_batch(include_str!("../migrations/008_session_signal_log.sql")).unwrap();
     conn.execute_batch(include_str!("../migrations/009_baseline_metrics.sql")).unwrap();
+    conn.execute_batch(include_str!("../migrations/010_pending_orders.sql")).unwrap();
     conn
 }
 

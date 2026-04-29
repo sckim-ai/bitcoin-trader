@@ -349,6 +349,96 @@ pub fn count_completed_trades(conn: &Connection, session_id: i64) -> Result<usiz
     Ok(n as usize)
 }
 
+// ─── Pending Orders (Phase 4A.5) ───
+
+#[derive(Debug, Clone)]
+pub struct PendingOrder {
+    pub uuid: String,
+    pub session_id: i64,
+    pub side: String,            // "bid" | "ask"
+    pub market: String,
+    pub ord_type: String,        // "price" | "market" | "limit"
+    pub target_price: Option<f64>,
+    pub requested: f64,          // bid → KRW amount, ask → coin volume
+    pub placed_at: String,
+    pub status: String,          // "wait" | "done" | "cancel"
+    pub last_checked: Option<String>,
+    pub resolved_at: Option<String>,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn insert_pending_order(
+    conn: &Connection,
+    uuid: &str,
+    session_id: i64,
+    side: &str,
+    market: &str,
+    ord_type: &str,
+    target_price: Option<f64>,
+    requested: f64,
+    placed_at: &str,
+    status: &str,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO pending_orders
+            (uuid, session_id, side, market, ord_type, target_price, requested,
+             placed_at, status)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         ON CONFLICT(uuid) DO UPDATE SET status = excluded.status",
+        params![uuid, session_id, side, market, ord_type, target_price, requested,
+                placed_at, status],
+    )?;
+    Ok(())
+}
+
+/// All `wait`-state orders across all sessions. Tracker reconciles these
+/// at the start of every cycle.
+pub fn list_pending_wait(conn: &Connection) -> Result<Vec<PendingOrder>> {
+    let mut stmt = conn.prepare(
+        "SELECT uuid, session_id, side, market, ord_type, target_price, requested,
+                placed_at, status, last_checked, resolved_at
+         FROM pending_orders WHERE status = 'wait' ORDER BY placed_at ASC",
+    )?;
+    let rows = stmt.query_map([], row_to_pending)?;
+    rows.collect()
+}
+
+fn row_to_pending(row: &rusqlite::Row) -> Result<PendingOrder> {
+    Ok(PendingOrder {
+        uuid: row.get(0)?,
+        session_id: row.get(1)?,
+        side: row.get(2)?,
+        market: row.get(3)?,
+        ord_type: row.get(4)?,
+        target_price: row.get(5)?,
+        requested: row.get(6)?,
+        placed_at: row.get(7)?,
+        status: row.get(8)?,
+        last_checked: row.get(9)?,
+        resolved_at: row.get(10)?,
+    })
+}
+
+pub fn mark_pending_resolved(
+    conn: &Connection,
+    uuid: &str,
+    new_status: &str,    // "done" | "cancel"
+    resolved_at: &str,
+) -> Result<usize> {
+    conn.execute(
+        "UPDATE pending_orders SET status = ?1, resolved_at = ?2, last_checked = ?2
+         WHERE uuid = ?3",
+        params![new_status, resolved_at, uuid],
+    )
+}
+
+pub fn touch_pending_check(conn: &Connection, uuid: &str, when: &str) -> Result<usize> {
+    conn.execute(
+        "UPDATE pending_orders SET last_checked = ?1 WHERE uuid = ?2",
+        params![when, uuid],
+    )
+}
+
 // ─── Live Equity ───
 
 pub fn upsert_equity(conn: &Connection, session_id: i64, ts: &str, equity: f64, position: &str) -> Result<()> {
@@ -391,6 +481,10 @@ mod tests {
         conn.execute_batch(s7).unwrap();
         let s8 = include_str!("../../migrations/008_session_signal_log.sql");
         conn.execute_batch(s8).unwrap();
+        let s9 = include_str!("../../migrations/009_baseline_metrics.sql");
+        conn.execute_batch(s9).unwrap();
+        let s10 = include_str!("../../migrations/010_pending_orders.sql");
+        conn.execute_batch(s10).unwrap();
         conn
     }
 

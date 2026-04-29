@@ -306,6 +306,33 @@ impl UpbitClient {
             .map_err(|e| format!("parse OrderResponse: {e} — body: {text}"))
     }
 
+    /// Cancel an open order by uuid. Used by 4A.5's stale-order timeout.
+    /// Returns the cancelled order's final state.
+    pub async fn cancel_order(&self, uuid: &str) -> Result<OrderResponse, String> {
+        let query = format!("uuid={}", uuid);
+        let query_hash = Self::hash_query(&query);
+        let token = self
+            .generate_token(Some(&query_hash))
+            .map_err(|e| format!("token: {e}"))?;
+
+        let url = format!("https://api.upbit.com/v1/order?uuid={}", uuid);
+        let resp = self
+            .client
+            .delete(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+            .map_err(|e| format!("send: {e}"))?;
+
+        let status = resp.status();
+        let text = resp.text().await.map_err(|e| format!("body read: {e}"))?;
+        if !status.is_success() {
+            return Err(format!("Upbit {} — {}", status, text));
+        }
+        serde_json::from_str::<OrderResponse>(&text)
+            .map_err(|e| format!("parse OrderResponse: {e} — body: {text}"))
+    }
+
     /// Fetch a single order's current state by uuid. Used by 4A.5 to track
     /// pending limit orders and by 4A.4 to confirm execution.
     pub async fn get_order(&self, uuid: &str) -> Result<OrderResponse, String> {
