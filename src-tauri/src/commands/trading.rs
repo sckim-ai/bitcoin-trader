@@ -16,18 +16,17 @@ pub struct PositionInfo {
 }
 
 fn create_client() -> Result<UpbitClient, String> {
-    let access_key =
-        std::env::var("UPBIT_ACCESS_KEY").map_err(|_| "UPBIT_ACCESS_KEY not set".to_string())?;
-    let secret_key =
-        std::env::var("UPBIT_SECRET_KEY").map_err(|_| "UPBIT_SECRET_KEY not set".to_string())?;
-    Ok(UpbitClient::new(access_key, secret_key))
+    // Resolution order: OS keyring → env var → error.
+    // See commands::upbit_keys::load_upbit_keys.
+    crate::commands::upbit_keys::upbit_client_or_err()
 }
 
-/// Public ticker/candle endpoints don't need auth — keys default to empty if unset.
+/// Public ticker/candle endpoints don't need auth — empty keys are fine.
+/// Still tries keyring/env first so an existing UpbitClient instance is reused
+/// transparently for both public and authed endpoints.
 fn create_public_client() -> UpbitClient {
-    let access_key = std::env::var("UPBIT_ACCESS_KEY").unwrap_or_default();
-    let secret_key = std::env::var("UPBIT_SECRET_KEY").unwrap_or_default();
-    UpbitClient::new(access_key, secret_key)
+    let (access, secret, _) = crate::commands::upbit_keys::load_upbit_keys();
+    UpbitClient::new(access.unwrap_or_default(), secret.unwrap_or_default())
 }
 
 #[tauri::command]

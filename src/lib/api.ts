@@ -295,6 +295,36 @@ export async function testNotification(
   throw new Error("Notification test via PWA not yet implemented");
 }
 
+// --- Upbit Keys (OS keychain via Tauri) ---
+
+export interface UpbitKeyStatus {
+  has_access: boolean;
+  has_secret: boolean;
+  /** "keyring" / "env" / "none" — tells the UI where active keys come from. */
+  source: "keyring" | "env" | "none";
+}
+
+export async function saveUpbitKeys(accessKey: string, secretKey: string): Promise<void> {
+  if (isTauri) return tauriInvoke("save_upbit_keys", { accessKey, secretKey });
+  throw new Error("Upbit key management is desktop-only (uses OS keychain)");
+}
+
+export async function getUpbitKeyStatus(): Promise<UpbitKeyStatus> {
+  if (isTauri) return tauriInvoke("get_upbit_key_status");
+  throw new Error("Upbit key management is desktop-only");
+}
+
+export async function clearUpbitKeys(): Promise<void> {
+  if (isTauri) return tauriInvoke("clear_upbit_keys");
+  throw new Error("Upbit key management is desktop-only");
+}
+
+/** Returns the number of currencies the account holds — proves keys work. */
+export async function testUpbitConnection(): Promise<number> {
+  if (isTauri) return tauriInvoke("test_upbit_connection");
+  throw new Error("Upbit key management is desktop-only");
+}
+
 // --- Migration API ---
 
 export interface MigrationResult {

@@ -573,11 +573,9 @@ pub async fn run_loop(
 }
 
 fn create_client() -> Result<UpbitClient, String> {
-    let access_key =
-        std::env::var("UPBIT_ACCESS_KEY").map_err(|_| "UPBIT_ACCESS_KEY not set".to_string())?;
-    let secret_key =
-        std::env::var("UPBIT_SECRET_KEY").map_err(|_| "UPBIT_SECRET_KEY not set".to_string())?;
-    Ok(UpbitClient::new(access_key, secret_key))
+    // Resolution order: OS keyring → env var → error.
+    // See commands::upbit_keys::load_upbit_keys.
+    crate::commands::upbit_keys::upbit_client_or_err()
 }
 
 // ─── Data auto-update ───

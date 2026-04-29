@@ -1,17 +1,23 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Settings,
   Key,
   Database,
   Info,
   Save,
-  Check,
   Bell,
   Send,
+  Trash2,
+  Wifi,
 } from "lucide-react";
 import {
   saveNotificationConfig,
   testNotification,
+  saveUpbitKeys,
+  getUpbitKeyStatus,
+  clearUpbitKeys,
+  testUpbitConnection,
+  type UpbitKeyStatus,
 } from "../lib/api";
 import { Card, CardContent, CardHeader } from "../components/ui/Card";
 import { Input } from "../components/ui/Input";
@@ -22,7 +28,14 @@ export default function SettingsPage() {
   const [accessKey, setAccessKey] = useState("");
   const [secretKey, setSecretKey] = useState("");
   const [defaultStrategy, setDefaultStrategy] = useState("V3");
-  const [saved, setSaved] = useState(false);
+  const [keyStatus, setKeyStatus] = useState<UpbitKeyStatus | null>(null);
+  const [keyMsg, setKeyMsg] = useState<{ tone: "ok" | "err" | "info"; text: string } | null>(null);
+  const [keyBusy, setKeyBusy] = useState(false);
+
+  const refreshKeyStatus = async () => {
+    try { setKeyStatus(await getUpbitKeyStatus()); } catch { /* desktop-only */ }
+  };
+  useEffect(() => { refreshKeyStatus(); }, []);
 
   // Notification state
   const [fcmServerKey, setFcmServerKey] = useState("");
@@ -42,9 +55,51 @@ export default function SettingsPage() {
     { key: "V3", name: "Regime Adaptive" },
   ];
 
-  const handleSaveKeys = () => {
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+  const handleSaveKeys = async () => {
+    if (!accessKey.trim() || !secretKey.trim()) {
+      setKeyMsg({ tone: "err", text: "Both keys are required." });
+      return;
+    }
+    setKeyBusy(true);
+    setKeyMsg(null);
+    try {
+      await saveUpbitKeys(accessKey.trim(), secretKey.trim());
+      setAccessKey("");
+      setSecretKey("");
+      await refreshKeyStatus();
+      setKeyMsg({ tone: "ok", text: "Saved to OS keychain." });
+    } catch (e) {
+      setKeyMsg({ tone: "err", text: `Save failed: ${e instanceof Error ? e.message : String(e)}` });
+    } finally {
+      setKeyBusy(false);
+    }
+  };
+
+  const handleTestKeys = async () => {
+    setKeyBusy(true);
+    setKeyMsg({ tone: "info", text: "Testing connection..." });
+    try {
+      const n = await testUpbitConnection();
+      setKeyMsg({ tone: "ok", text: `Connection OK — account holds ${n} currencies.` });
+    } catch (e) {
+      setKeyMsg({ tone: "err", text: `Test failed: ${e instanceof Error ? e.message : String(e)}` });
+    } finally {
+      setKeyBusy(false);
+    }
+  };
+
+  const handleClearKeys = async () => {
+    if (!window.confirm("Remove the saved Upbit API keys from the OS keychain?")) return;
+    setKeyBusy(true);
+    try {
+      await clearUpbitKeys();
+      await refreshKeyStatus();
+      setKeyMsg({ tone: "ok", text: "Keys cleared." });
+    } catch (e) {
+      setKeyMsg({ tone: "err", text: `Clear failed: ${e instanceof Error ? e.message : String(e)}` });
+    } finally {
+      setKeyBusy(false);
+    }
   };
 
   const token = localStorage.getItem("auth_token") || "";
@@ -91,21 +146,40 @@ export default function SettingsPage() {
         Settings
       </h1>
 
-      {/* API Keys */}
+      {/* Upbit API Keys — OS keychain via Tauri keyring crate */}
       <Card>
         <CardHeader className="flex items-center gap-2">
           <Key size={16} className="text-amber-500" />
-          <h2 className="text-sm font-semibold text-zinc-300">API Keys</h2>
+          <h2 className="text-sm font-semibold text-zinc-300">Upbit API Keys</h2>
         </CardHeader>
         <CardContent className="space-y-4">
-          <p className="text-xs text-zinc-500">Upbit API keys for live trading. Keys are stored locally.</p>
+          <p className="text-xs text-zinc-500">
+            실거래 자동매매에 사용. OS 키체인(Windows Credential Manager / macOS Keychain / Linux Secret Service)에 저장되며 코드/설정 파일에는 남지 않습니다.
+          </p>
+
+          {/* Status badge */}
+          <div className="flex items-center gap-2 text-xs">
+            {keyStatus == null ? (
+              <span className="text-zinc-500">Loading…</span>
+            ) : keyStatus.has_access && keyStatus.has_secret ? (
+              <span className="px-2 py-0.5 rounded bg-emerald-900/40 text-emerald-300 border border-emerald-800">
+                Configured · source: <span className="font-data">{keyStatus.source}</span>
+              </span>
+            ) : (
+              <span className="px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-700">
+                Not configured
+              </span>
+            )}
+          </div>
+
           <Input
             label="Access Key"
             type="password"
             passwordToggle
             value={accessKey}
             onChange={(e) => setAccessKey(e.target.value)}
-            placeholder="Enter Upbit Access Key"
+            placeholder={keyStatus?.has_access ? "(saved — enter new value to replace)" : "Enter Upbit Access Key"}
+            disabled={keyBusy}
           />
           <Input
             label="Secret Key"
@@ -113,11 +187,38 @@ export default function SettingsPage() {
             passwordToggle
             value={secretKey}
             onChange={(e) => setSecretKey(e.target.value)}
-            placeholder="Enter Upbit Secret Key"
+            placeholder={keyStatus?.has_secret ? "(saved — enter new value to replace)" : "Enter Upbit Secret Key"}
+            disabled={keyBusy}
           />
-          <Button onClick={handleSaveKeys} size="sm">
-            {saved ? <><Check size={14} /> Saved</> : <><Save size={14} /> Save Keys</>}
-          </Button>
+
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={handleSaveKeys} size="sm" disabled={keyBusy || (!accessKey && !secretKey)}>
+              <Save size={14} /> Save
+            </Button>
+            <Button
+              onClick={handleTestKeys}
+              size="sm"
+              variant="secondary"
+              disabled={keyBusy || !keyStatus?.has_access || !keyStatus?.has_secret}
+            >
+              <Wifi size={14} /> Test connection
+            </Button>
+            <Button
+              onClick={handleClearKeys}
+              size="sm"
+              variant="danger"
+              disabled={keyBusy || !keyStatus?.has_access}
+            >
+              <Trash2 size={14} /> Clear
+            </Button>
+          </div>
+
+          {keyMsg && (
+            <p className={`text-xs ${
+              keyMsg.tone === "ok" ? "text-emerald-400" :
+              keyMsg.tone === "err" ? "text-rose-400" : "text-zinc-400"
+            }`}>{keyMsg.text}</p>
+          )}
         </CardContent>
       </Card>
 

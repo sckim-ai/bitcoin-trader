@@ -15,9 +15,10 @@ pub fn seconds_until_next_hour() -> u64 {
 }
 
 pub fn create_public_client() -> UpbitClient {
-    let ak = std::env::var("UPBIT_ACCESS_KEY").unwrap_or_default();
-    let sk = std::env::var("UPBIT_SECRET_KEY").unwrap_or_default();
-    UpbitClient::new(ak, sk)
+    // Public endpoints work without keys; still resolve via keyring → env so
+    // authed endpoints reuse the same client when keys ARE configured.
+    let (access, secret, _) = crate::commands::upbit_keys::load_upbit_keys();
+    UpbitClient::new(access.unwrap_or_default(), secret.unwrap_or_default())
 }
 
 /// Run the live scheduler forever. Wakes at every hour boundary, iterates all

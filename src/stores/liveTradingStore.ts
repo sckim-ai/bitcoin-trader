@@ -203,6 +203,11 @@ export const useLiveTradingStore = create<LiveTradingState>((set, get) => ({
       const { listen } = await import("@tauri-apps/api/event");
       const u1 = await listen<{ session_id?: number }>("session:update", (e) => {
         get().refreshSessions();
+        // The hourly cycle has rolled in a fresh candle and a new signal_log
+        // entry. Refresh marketData too so the strip can paint the new bar —
+        // otherwise marketData stays frozen at mount time and signal
+        // transitions occurring after mount have no candle slot to colour.
+        get().loadMarketData();
         // After the engine cycle persists a fresh signal_log, refresh any
         // session whose strip is currently being viewed.
         const sid = e.payload?.session_id;

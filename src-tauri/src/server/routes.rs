@@ -125,9 +125,10 @@ async fn candles_handler(
 async fn price_handler(
     Query(q): Query<MarketQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    let (ak, sk, _) = crate::commands::upbit_keys::load_upbit_keys();
     let client = crate::api::upbit::UpbitClient::new(
-        std::env::var("UPBIT_ACCESS_KEY").unwrap_or_default(),
-        std::env::var("UPBIT_SECRET_KEY").unwrap_or_default(),
+        ak.unwrap_or_default(),
+        sk.unwrap_or_default(),
     );
     let price = client
         .get_current_price(&q.market)
