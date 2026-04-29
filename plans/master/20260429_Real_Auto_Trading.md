@@ -1,5 +1,15 @@
 # Real Auto-Trading (Phase 4A) Master Plan
 
+> **Status (2026-04-29)**: 코드 단계(4A.1 ~ 4A.7) 모두 완료. **사용자 E2E 검증 대기**.
+> 자동 검증 진척: `cargo build --tests` 통과, `cum_return_parity` 5/5,
+> 신규 통합 테스트 ([safety_circuit_breaker_test](../../src-tauri/tests/safety_circuit_breaker_test.rs)
+> 8 케이스, [multi_real_test](../../src-tauri/tests/multi_real_test.rs) 8 케이스,
+> [pending_orders_test](../../src-tauri/tests/pending_orders_test.rs) 5 케이스,
+> [order_executor_test](../../src-tauri/tests/order_executor_test.rs) 11 케이스,
+> [live_signal_test](../../src-tauri/tests/live_signal_test.rs) 13 케이스 — 총 45 케이스).
+> 운용 시작 전 [Manual/real-trading-e2e-checklist.md](../../Manual/real-trading-e2e-checklist.md)
+> 9개 섹션 모두 통과 필요.
+
 ## TL;DR
 
 | 항목 | 내용 |
