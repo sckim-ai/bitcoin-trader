@@ -169,12 +169,12 @@ pub async fn run_session_cycle(
         .fold(1.0_f64, |acc, t| acc * (1.0 + t.pnl_pct - 2.0 * fee));
     let live_return = (live_factor - 1.0) * 100.0;
 
-    // 4b. Real 모드: Upbit 실 잔고로 reconcile + 레거시 알고리즘으로 신호 결정.
-    //     이번 단계(4A.3)는 결정 + 잔고 동기화 + 로깅까지. 실주문 실행은 4A.4.
+    // 4b. Real 모드: Upbit 실 잔고로 reconcile + 레거시 알고리즘으로 신호 결정
+    //     + 시장가 분할 주문 실행 (Phase 4A.4).
     //     키 누락이나 API 에러는 paper 흐름을 깨지 않고 stderr 로그만 남김.
     if session.mode == "real" {
         if let Err(e) = real_reconcile_step(
-            &session, &data, &result,
+            db, &session, &data, &result,
             &mut current_position, &mut cbp, &mut cbv, &mut last_signal_str,
         ).await {
             eprintln!("[real cycle] session={} reconcile error: {e}", session.id);
@@ -212,22 +212,22 @@ pub async fn run_session_cycle(
     })
 }
 
-/// Real-mode reconcile + signal resolution. Mutates the position snapshot
-/// (`current_position`/`cbp`/`cbv`) and `last_signal` in place so the caller
-/// can persist a single coherent state. Phase 4A.3 only logs the decision —
-/// actual order execution lands in 4A.4.
+/// Real-mode reconcile + signal resolution + market order execution.
+/// Mutates the position snapshot (`current_position`/`cbp`/`cbv`) and
+/// `last_signal` in place so the caller can persist a single coherent state.
 ///
 /// Steps (mirrors legacy `LiveTradingService.ExecuteTradeCycleAsync`):
 ///   1. Load Upbit balances + current price.
-///   2. Reconcile DB position vs. real coin balance (handles external
-///      trades / dust / status drift).
+///   2. Reconcile DB position vs. real coin balance (external trades / dust).
 ///   3. Filter unfinished trailing candle so signal computation is stable.
-///   4. Re-derive last signal from the confirmed-window simulation. We
-///      reuse the original `result` when input matches (most cycles), but
-///      run a confirmed-window simulation for the live signal extraction
-///      to match legacy semantics exactly.
+///   4. Re-derive last signal from the confirmed-window simulation log.
 ///   5. `resolve_live_signal(sim_signal, real_position)` → final action.
+///   6. If final == "buy" → execute_split_buy (KRW × 0.9995 for fee buffer).
+///      If final == "sell" → execute_split_sell (full coin balance).
+///      Insert is_real=1 row into live_trades + update session position
+///      from execution result.
 async fn real_reconcile_step<'a>(
+    db: &Arc<Mutex<Connection>>,
     session: &LiveSession,
     data: &[MarketData],
     result: &SimulationResult,
@@ -241,6 +241,8 @@ async fn real_reconcile_step<'a>(
 
     let currency = session.market.split('-').nth(1).unwrap_or("ETH");
     let coin_balance = upbit.get_balance(currency).await
+        .map_err(|e| -> BoxErr { e.to_string().into() })?;
+    let krw_balance = upbit.get_balance("KRW").await
         .map_err(|e| -> BoxErr { e.to_string().into() })?;
     let current_price = upbit.get_current_price(&session.market).await
         .map_err(|e| -> BoxErr { e.to_string().into() })?;
@@ -288,22 +290,113 @@ async fn real_reconcile_step<'a>(
     let position_int = if status == "holding" { 1 } else { 0 };
     let final_signal = resolve_live_signal(&sim_signal, position_int);
 
-    // Apply reconciled state to the caller's mutable refs so update_session_cycle
-    // persists the real state (not the sim's preferred state).
-    *current_position = status;
-    if status == "holding" {
-        *cbp = Some(rec_buy_price);
-        *cbv = Some(rec_buy_volume);
-    } else {
-        *cbp = None;
-        *cbv = None;
+    eprintln!(
+        "[real cycle] session={} sim={} status={} coin={:.6} krw={:.0} price={:.0} → final={}",
+        session.id, sim_signal, status, coin_balance, krw_balance, current_price, final_signal,
+    );
+
+    // Initialize position output to the reconciled state — order execution
+    // may overwrite below.
+    let mut applied_status: &str = status;
+    let mut applied_buy_price: Option<f64> = if status == "holding" { Some(rec_buy_price) } else { None };
+    let mut applied_buy_volume: Option<f64> = if status == "holding" { Some(rec_buy_volume) } else { None };
+
+    // ─── Order execution ───
+    use crate::services::order_executor::{execute_split_buy, execute_split_sell, MIN_ORDER_KRW};
+    let now_ts = Utc::now().to_rfc3339();
+    let fee_rate = 0.0005; // Upbit market-order fee (KRW pairs)
+
+    match final_signal {
+        "buy" if krw_balance > MIN_ORDER_KRW => {
+            // Reserve 0.05% headroom for fee + price drift.
+            let order_krw = krw_balance * 0.9995;
+            eprintln!("[real BUY] session={} {:.0} KRW", session.id, order_krw);
+            let result = execute_split_buy(&upbit, &session.market, order_krw).await;
+            if !result.success {
+                eprintln!("[real BUY] FAILED — all chunks failed: {:?}", result.errors);
+            } else {
+                // Compute totals from the chunks that succeeded. Upbit market
+                // buys can return executed_volume=0 in the immediate response
+                // (still settling); we conservatively fall back to estimating
+                // from the requested KRW / price. Phase 4A.5 will add
+                // get_order polling to refine these numbers.
+                let total_executed: f64 = result.orders.iter()
+                    .map(|o| o.executed_volume_f64())
+                    .sum();
+                let estimated = order_krw / current_price * (1.0 - fee_rate);
+                let booked_volume = if total_executed > 0.0 { total_executed } else { estimated };
+                let booked_price = current_price;
+
+                let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
+                live_repo::insert_trade(
+                    &conn, session.id, &now_ts, "buy",
+                    booked_price, booked_volume,
+                    booked_price * booked_volume * fee_rate,
+                    "real_buy", None, None, true, // is_real=1
+                ).map_err(|e| -> BoxErr { e.to_string().into() })?;
+                drop(conn);
+
+                applied_status = "holding";
+                applied_buy_price = Some(booked_price);
+                applied_buy_volume = Some(booked_volume);
+                eprintln!(
+                    "[real BUY] OK — vol={:.8} @ {:.0} (chunks={}, executed={:.8})",
+                    booked_volume, booked_price, result.orders.len(), total_executed,
+                );
+            }
+        }
+        "sell" if coin_balance * current_price > MIN_ORDER_KRW => {
+            eprintln!("[real SELL] session={} vol={:.8} @ ~{:.0}", session.id, coin_balance, current_price);
+            let result = execute_split_sell(&upbit, &session.market, coin_balance, current_price).await;
+            if !result.success {
+                eprintln!("[real SELL] FAILED — all chunks failed: {:?}", result.errors);
+            } else {
+                let total_executed: f64 = result.orders.iter()
+                    .map(|o| o.executed_volume_f64())
+                    .sum();
+                let booked_volume = if total_executed > 0.0 { total_executed } else { coin_balance };
+                let booked_price = current_price;
+                let buy_price = rec_buy_price;
+                let pnl = if buy_price > 0.0 {
+                    (booked_price - buy_price) * booked_volume
+                } else { 0.0 };
+                let pnl_pct = if buy_price > 0.0 {
+                    (booked_price - buy_price) / buy_price * 100.0
+                } else { 0.0 };
+
+                let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
+                live_repo::insert_trade(
+                    &conn, session.id, &now_ts, "sell",
+                    booked_price, booked_volume,
+                    booked_price * booked_volume * fee_rate,
+                    "real_sell", Some(pnl), Some(pnl_pct), true, // is_real=1
+                ).map_err(|e| -> BoxErr { e.to_string().into() })?;
+                drop(conn);
+
+                applied_status = "idle";
+                applied_buy_price = None;
+                applied_buy_volume = None;
+                eprintln!(
+                    "[real SELL] OK — vol={:.8} @ {:.0} (P/L: {:.2}%)",
+                    booked_volume, booked_price, pnl_pct,
+                );
+            }
+        }
+        "buy" => {
+            eprintln!("[real BUY skipped] insufficient KRW ({:.0} ≤ {:.0})", krw_balance, MIN_ORDER_KRW);
+        }
+        "sell" => {
+            eprintln!("[real SELL skipped] dust balance ({:.6} × {:.0} = {:.0} ≤ {:.0})",
+                coin_balance, current_price, coin_balance * current_price, MIN_ORDER_KRW);
+        }
+        _ => {} // hold / ready / buy ready / sell ready — no action
     }
+
+    *current_position = applied_status;
+    *cbp = applied_buy_price;
+    *cbv = applied_buy_volume;
     *last_signal = final_signal.to_string();
 
-    eprintln!(
-        "[real cycle] session={} sim={} status={} balance={:.6} price={:.0} → final={}",
-        session.id, sim_signal, status, coin_balance, current_price, final_signal,
-    );
     Ok(())
 }
 

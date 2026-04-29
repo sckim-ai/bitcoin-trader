@@ -3,6 +3,48 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha512};
 use uuid::Uuid;
 
+/// Subset of Upbit /v1/orders response fields we actually use.
+/// All numeric fields ship as strings — Upbit returns "0.00150000" style
+/// formatted decimals, not numbers. Optional everywhere because market
+/// buys omit `volume` and market sells omit `price`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrderResponse {
+    pub uuid: String,
+    pub side: String,         // "bid" | "ask"
+    pub ord_type: String,     // "limit" | "price" | "market"
+    pub state: String,        // "wait" | "done" | "cancel"
+    pub market: String,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub volume: Option<String>,
+    #[serde(default)]
+    pub remaining_volume: Option<String>,
+    #[serde(default)]
+    pub price: Option<String>,
+    #[serde(default)]
+    pub executed_volume: Option<String>,
+    #[serde(default)]
+    pub paid_fee: Option<String>,
+    #[serde(default)]
+    pub trades_count: Option<i32>,
+}
+
+impl OrderResponse {
+    /// Helper: parse `executed_volume` as f64 (defaults to 0.0).
+    pub fn executed_volume_f64(&self) -> f64 {
+        self.executed_volume
+            .as_deref()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.0)
+    }
+
+    /// `state == "done"` — Upbit's "fully executed" indicator.
+    pub fn is_done(&self) -> bool {
+        self.state == "done"
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct JwtPayload {
     access_key: String,
@@ -172,6 +214,123 @@ impl UpbitClient {
             .await?;
 
         Ok(resp)
+    }
+
+    // ─── Market orders + parsed responses (Phase 4A.4) ─────────────────────
+    //
+    // Upbit market-order semantics:
+    //   - Market BUY: ord_type="price", price=KRW_AMOUNT (no volume).
+    //     Buy as much coin as `price` KRW will get at current ask.
+    //   - Market SELL: ord_type="market", volume=COIN_AMOUNT (no price).
+    //     Sell `volume` coin at current bid.
+    //
+    // Errors are stringified up front so callers can use the result inside
+    // async tasks without dragging non-Send dyn Error trait objects across
+    // .await boundaries.
+
+    /// Market BUY using KRW. `krw_amount` is the total quote currency to spend.
+    pub async fn place_market_buy(
+        &self,
+        market: &str,
+        krw_amount: f64,
+    ) -> Result<OrderResponse, String> {
+        // Upbit truncates to integer KRW; pass as integer string to avoid
+        // "Decimal precision" rejection.
+        let price_str = format!("{}", krw_amount.floor() as u64);
+        let query = format!(
+            "market={}&side=bid&price={}&ord_type=price",
+            market, price_str
+        );
+        let query_hash = Self::hash_query(&query);
+        let token = self
+            .generate_token(Some(&query_hash))
+            .map_err(|e| format!("token: {e}"))?;
+
+        let body = serde_json::json!({
+            "market": market,
+            "side": "bid",
+            "price": price_str,
+            "ord_type": "price",
+        });
+
+        self.send_order(&token, body).await
+    }
+
+    /// Market SELL given a coin volume.
+    pub async fn place_market_sell(
+        &self,
+        market: &str,
+        volume: f64,
+    ) -> Result<OrderResponse, String> {
+        // Volume kept at 8-decimal precision (Upbit max).
+        let volume_str = format!("{:.8}", volume);
+        let query = format!(
+            "market={}&side=ask&volume={}&ord_type=market",
+            market, volume_str
+        );
+        let query_hash = Self::hash_query(&query);
+        let token = self
+            .generate_token(Some(&query_hash))
+            .map_err(|e| format!("token: {e}"))?;
+
+        let body = serde_json::json!({
+            "market": market,
+            "side": "ask",
+            "volume": volume_str,
+            "ord_type": "market",
+        });
+
+        self.send_order(&token, body).await
+    }
+
+    async fn send_order(
+        &self,
+        token: &str,
+        body: serde_json::Value,
+    ) -> Result<OrderResponse, String> {
+        let resp = self
+            .client
+            .post("https://api.upbit.com/v1/orders")
+            .header("Authorization", format!("Bearer {}", token))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("send: {e}"))?;
+
+        let status = resp.status();
+        let text = resp.text().await.map_err(|e| format!("body read: {e}"))?;
+        if !status.is_success() {
+            return Err(format!("Upbit {} — {}", status, text));
+        }
+        serde_json::from_str::<OrderResponse>(&text)
+            .map_err(|e| format!("parse OrderResponse: {e} — body: {text}"))
+    }
+
+    /// Fetch a single order's current state by uuid. Used by 4A.5 to track
+    /// pending limit orders and by 4A.4 to confirm execution.
+    pub async fn get_order(&self, uuid: &str) -> Result<OrderResponse, String> {
+        let query = format!("uuid={}", uuid);
+        let query_hash = Self::hash_query(&query);
+        let token = self
+            .generate_token(Some(&query_hash))
+            .map_err(|e| format!("token: {e}"))?;
+
+        let url = format!("https://api.upbit.com/v1/order?uuid={}", uuid);
+        let resp = self
+            .client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+            .map_err(|e| format!("send: {e}"))?;
+
+        let status = resp.status();
+        let text = resp.text().await.map_err(|e| format!("body read: {e}"))?;
+        if !status.is_success() {
+            return Err(format!("Upbit {} — {}", status, text));
+        }
+        serde_json::from_str::<OrderResponse>(&text)
+            .map_err(|e| format!("parse OrderResponse: {e} — body: {text}"))
     }
 
     // ─── Account (auth needed) ───
