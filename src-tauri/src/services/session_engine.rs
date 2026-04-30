@@ -392,6 +392,15 @@ async fn real_reconcile_step<'a>(
         .map(|m| m.candle.close)
         .unwrap_or(current_price);
 
+    // Notification helper. Built ONCE up front; the actual .await on send is
+    // done after we drop the DB MutexGuard (Send rule). The manager itself is
+    // a small struct with channel clients — cheap to construct.
+    let notifier = {
+        let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
+        crate::notifications::manager::NotificationManager::from_db(&conn, session.user_id)
+    };
+    let prev_signal = session.last_signal.clone().unwrap_or_default();
+
     match final_signal {
         "buy" if krw_balance > MIN_ORDER_KRW => {
             let order_krw = krw_balance * 0.9995;
@@ -411,34 +420,52 @@ async fn real_reconcile_step<'a>(
                 let done_executed: f64 = done_orders.iter()
                     .map(|o| o.executed_volume_f64()).sum();
 
-                let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
-                if done_executed > 0.0 {
-                    let booked_price = target_price; // limit price ≈ fill price
-                    let booked_volume = done_executed;
-                    live_repo::insert_trade(
-                        &conn, session.id, &now_ts, "buy",
-                        booked_price, booked_volume,
-                        booked_price * booked_volume * fee_rate,
-                        "real_buy", None, None, true,
-                    ).map_err(|e| -> BoxErr { e.to_string().into() })?;
-                    applied_status = "holding";
-                    applied_buy_price = Some(booked_price);
-                    applied_buy_volume = Some(booked_volume);
-                }
-                for o in result.orders.iter() {
-                    let initial = if o.is_done() { "done" } else { "wait" };
-                    let _ = live_repo::insert_pending_order(
-                        &conn, &o.uuid, session.id, "bid", &session.market,
-                        &o.ord_type, Some(target_price),
-                        order_krw / result.orders.len() as f64,
-                        &now_ts, initial,
-                    );
-                }
-                drop(conn);
+                // DB 작업은 별도 scope에 묶어 MutexGuard가 .await 경계로
+                // 새지 않도록 한다 (CLAUDE.md: MutexGuard !Send).
+                {
+                    let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
+                    if done_executed > 0.0 {
+                        let booked_price = target_price; // limit price ≈ fill price
+                        let booked_volume = done_executed;
+                        live_repo::insert_trade(
+                            &conn, session.id, &now_ts, "buy",
+                            booked_price, booked_volume,
+                            booked_price * booked_volume * fee_rate,
+                            "real_buy", None, None, true,
+                        ).map_err(|e| -> BoxErr { e.to_string().into() })?;
+                        applied_status = "holding";
+                        applied_buy_price = Some(booked_price);
+                        applied_buy_volume = Some(booked_volume);
+                    }
+                    for o in result.orders.iter() {
+                        let initial = if o.is_done() { "done" } else { "wait" };
+                        let _ = live_repo::insert_pending_order(
+                            &conn, &o.uuid, session.id, "bid", &session.market,
+                            &o.ord_type, Some(target_price),
+                            order_krw / result.orders.len() as f64,
+                            &now_ts, initial,
+                        );
+                    }
+                } // ← MutexGuard dropped here
                 eprintln!(
                     "[real BUY] chunks={} done={} wait={} executed={:.8}",
                     result.orders.len(), done_orders.len(), wait_orders.len(), done_executed,
                 );
+                if done_executed > 0.0 {
+                    let note = format!(
+                        "session {} ({}), {} chunks done / {} wait",
+                        session.id, session.label, done_orders.len(), wait_orders.len(),
+                    );
+                    notifier.notify_trade_rich(
+                        "buy", &session.market, target_price, done_executed, None, Some(&note),
+                    ).await;
+                } else if !wait_orders.is_empty() {
+                    notifier.notify_signal(
+                        &session.market,
+                        &format!("매수 주문 등록 (close {:.0}원, wait)", target_price),
+                        &session.label,
+                    ).await;
+                }
             }
         }
         "sell" if coin_balance * current_price > MIN_ORDER_KRW => {
@@ -457,49 +484,65 @@ async fn real_reconcile_step<'a>(
                 let done_executed: f64 = done_orders.iter()
                     .map(|o| o.executed_volume_f64()).sum();
 
-                let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
-                if done_executed > 0.0 {
-                    let booked_price = target_price;
-                    let booked_volume = done_executed;
-                    let buy_price = rec_buy_price;
-                    let pnl = if buy_price > 0.0 {
-                        (booked_price - buy_price) * booked_volume
-                    } else { 0.0 };
-                    let pnl_pct = if buy_price > 0.0 {
-                        (booked_price - buy_price) / buy_price * 100.0
-                    } else { 0.0 };
-                    live_repo::insert_trade(
-                        &conn, session.id, &now_ts, "sell",
-                        booked_price, booked_volume,
-                        booked_price * booked_volume * fee_rate,
-                        "real_sell", Some(pnl), Some(pnl_pct), true,
-                    ).map_err(|e| -> BoxErr { e.to_string().into() })?;
-                    // Position flip only when the entire balance was consumed
-                    // by done chunks. Partial fills (still some volume in
-                    // wait orders or balance remaining) keep position as is —
-                    // next cycle reconciles.
-                    let remaining = coin_balance - done_executed;
-                    if remaining * current_price < MIN_ORDER_KRW {
-                        applied_status = "idle";
-                        applied_buy_price = None;
-                        applied_buy_volume = None;
+                {
+                    let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
+                    if done_executed > 0.0 {
+                        let booked_price = target_price;
+                        let booked_volume = done_executed;
+                        let buy_price = rec_buy_price;
+                        let pnl = if buy_price > 0.0 {
+                            (booked_price - buy_price) * booked_volume
+                        } else { 0.0 };
+                        let pnl_pct = if buy_price > 0.0 {
+                            (booked_price - buy_price) / buy_price * 100.0
+                        } else { 0.0 };
+                        live_repo::insert_trade(
+                            &conn, session.id, &now_ts, "sell",
+                            booked_price, booked_volume,
+                            booked_price * booked_volume * fee_rate,
+                            "real_sell", Some(pnl), Some(pnl_pct), true,
+                        ).map_err(|e| -> BoxErr { e.to_string().into() })?;
+                        let remaining = coin_balance - done_executed;
+                        if remaining * current_price < MIN_ORDER_KRW {
+                            applied_status = "idle";
+                            applied_buy_price = None;
+                            applied_buy_volume = None;
+                        }
+                        eprintln!("[real SELL] booked done={:.8} (P/L: {:.2}%)", booked_volume, pnl_pct);
                     }
-                    eprintln!("[real SELL] booked done={:.8} (P/L: {:.2}%)", booked_volume, pnl_pct);
-                }
-                for o in result.orders.iter() {
-                    let initial = if o.is_done() { "done" } else { "wait" };
-                    let _ = live_repo::insert_pending_order(
-                        &conn, &o.uuid, session.id, "ask", &session.market,
-                        &o.ord_type, Some(target_price),
-                        coin_balance / result.orders.len() as f64,
-                        &now_ts, initial,
-                    );
-                }
-                drop(conn);
+                    for o in result.orders.iter() {
+                        let initial = if o.is_done() { "done" } else { "wait" };
+                        let _ = live_repo::insert_pending_order(
+                            &conn, &o.uuid, session.id, "ask", &session.market,
+                            &o.ord_type, Some(target_price),
+                            coin_balance / result.orders.len() as f64,
+                            &now_ts, initial,
+                        );
+                    }
+                } // ← MutexGuard dropped here
                 eprintln!(
                     "[real SELL] chunks={} done={} wait={}",
                     result.orders.len(), done_orders.len(), wait_orders.len(),
                 );
+                if done_executed > 0.0 {
+                    let pnl_pct = if rec_buy_price > 0.0 {
+                        (target_price - rec_buy_price) / rec_buy_price * 100.0
+                    } else { 0.0 };
+                    let note = format!(
+                        "session {} ({}), {} chunks done / {} wait",
+                        session.id, session.label, done_orders.len(), wait_orders.len(),
+                    );
+                    notifier.notify_trade_rich(
+                        "sell", &session.market, target_price, done_executed,
+                        Some(pnl_pct), Some(&note),
+                    ).await;
+                } else if !wait_orders.is_empty() {
+                    notifier.notify_signal(
+                        &session.market,
+                        &format!("매도 주문 등록 (close {:.0}원, wait)", target_price),
+                        &session.label,
+                    ).await;
+                }
             }
         }
         "buy" => {
@@ -509,7 +552,19 @@ async fn real_reconcile_step<'a>(
             eprintln!("[real SELL skipped] dust balance ({:.6} × {:.0} = {:.0} ≤ {:.0})",
                 coin_balance, current_price, coin_balance * current_price, MIN_ORDER_KRW);
         }
-        _ => {} // hold / ready / buy ready / sell ready — no action
+        // Ready signals: notify ONLY on first transition into the ready
+        // state. session.last_signal (previous cycle's final) is the
+        // dedup key — same as legacy `_lastNotifiedSignal` in
+        // LiveTradingService.cs:1726-1756.
+        "buy ready" if prev_signal != "buy ready" => {
+            eprintln!("[real cycle] notify BUY READY (transition from '{}')", prev_signal);
+            notifier.notify_ready(&session.market, "buy", target_price).await;
+        }
+        "sell ready" if prev_signal != "sell ready" => {
+            eprintln!("[real cycle] notify SELL READY (transition from '{}')", prev_signal);
+            notifier.notify_ready(&session.market, "sell", target_price).await;
+        }
+        _ => {} // hold / ready / repeated ready — no action
     }
 
     *current_position = applied_status;

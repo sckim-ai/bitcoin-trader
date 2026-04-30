@@ -104,6 +104,46 @@ impl NotificationManager {
             .await;
     }
 
+    /// "매수 대기" / "매도 대기" 알림. 신호 발생 직후 한 번만 보내도록
+    /// caller가 상태 비교 후 호출해야 함 (중복 방지는 호출자 책임).
+    pub async fn notify_ready(&self, market: &str, side: &str, target_price: f64) {
+        let label = match side {
+            "buy" => "매수 대기",
+            "sell" => "매도 대기",
+            _ => return,
+        };
+        self.send_all(&format!(
+            "📊 {} {} (close ≈ {:.0}원)",
+            market, label, target_price
+        )).await;
+    }
+
+    /// 매수/매도 후 추가 컨텍스트(전략, 봉 close 등)를 포함한 풍부한 알림.
+    /// `note`가 있으면 메시지에 추가. P/L은 sell일 때만 의미 있음.
+    pub async fn notify_trade_rich(
+        &self,
+        side: &str,
+        market: &str,
+        price: f64,
+        volume: f64,
+        pnl_pct: Option<f64>,
+        note: Option<&str>,
+    ) {
+        let head = match side {
+            "buy" => format!("🟢 {} 매수: {:.0}원 × {:.8}", market, price, volume),
+            "sell" => format!(
+                "🔴 {} 매도: {:.0}원 × {:.8} (P/L: {:+.2}%)",
+                market, price, volume, pnl_pct.unwrap_or(0.0)
+            ),
+            _ => return,
+        };
+        let msg = match note {
+            Some(n) if !n.is_empty() => format!("{}\n  ↳ {}", head, n),
+            _ => head,
+        };
+        self.send_all(&msg).await;
+    }
+
     pub async fn notify_alert(&self, message: &str) {
         self.send_all(&format!("⚠️ {}", message)).await;
     }

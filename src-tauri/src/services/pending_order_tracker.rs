@@ -60,82 +60,104 @@ pub async fn reconcile_pending_orders(
 
         match order.state.as_str() {
             "done" => {
-                // Late fill (was 'wait' last cycle, 'done' now). Record the
-                // executed volume as a real trade so the user's P/L reflects
-                // it. Without this insert, limit orders that fill across
-                // cycles would never appear in live_trades.
-                let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
+                // All DB work in a sub-scope so the MutexGuard drops before
+                // the notifier .await below (CLAUDE.md: MutexGuard !Send).
                 let executed = order.executed_volume_f64();
-                if executed > 0.0 {
-                    let target_price = p.target_price.unwrap_or(0.0);
-                    let booked_price = if target_price > 0.0 { target_price } else {
-                        // Fallback: avg from price field (usually only set for limit).
-                        order.price.as_deref().and_then(|s| s.parse().ok()).unwrap_or(0.0)
-                    };
-                    let fee_rate = 0.0005;
-                    let session = live_repo::get_session(&conn, p.session_id)
-                        .map_err(|e| -> BoxErr { e.to_string().into() })?;
-                    if let Some(s) = session {
-                        // Skip insert if this uuid was already booked
-                        // synchronously by session_engine (same-cycle done).
-                        // We detect by looking up the latest live_trades
-                        // row's signal column — the session_engine path
-                        // uses "real_buy"/"real_sell"; the tracker uses
-                        // "real_buy_late"/"real_sell_late" so the two
-                        // paths can never double-book the same uuid.
-                        if p.side == "bid" {
-                            let _ = live_repo::insert_trade(
-                                &conn, p.session_id, &now.to_rfc3339(), "buy",
-                                booked_price, executed,
-                                booked_price * executed * fee_rate,
-                                "real_buy_late", None, None, true,
-                            );
-                            // Late fill → flip session to holding using the
-                            // tracked price.
-                            let _ = live_repo::update_session_cycle(
-                                &conn, p.session_id,
-                                s.last_cycle_ts.as_deref().unwrap_or(""),
-                                s.last_signal.as_deref().unwrap_or(""),
-                                "holding",
-                                Some(booked_price), Some(executed),
-                                s.current_equity.unwrap_or(s.initial_capital),
-                                s.live_return,
-                            );
-                        } else if p.side == "ask" {
-                            let buy_price = s.current_buy_price.unwrap_or(0.0);
-                            let pnl = if buy_price > 0.0 {
-                                (booked_price - buy_price) * executed
-                            } else { 0.0 };
-                            let pnl_pct = if buy_price > 0.0 {
-                                (booked_price - buy_price) / buy_price * 100.0
-                            } else { 0.0 };
-                            let _ = live_repo::insert_trade(
-                                &conn, p.session_id, &now.to_rfc3339(), "sell",
-                                booked_price, executed,
-                                booked_price * executed * fee_rate,
-                                "real_sell_late", Some(pnl), Some(pnl_pct), true,
-                            );
-                            let _ = live_repo::update_session_cycle(
-                                &conn, p.session_id,
-                                s.last_cycle_ts.as_deref().unwrap_or(""),
-                                s.last_signal.as_deref().unwrap_or(""),
-                                "idle",
-                                None, None,
-                                s.current_equity.unwrap_or(s.initial_capital),
-                                s.live_return,
-                            );
-                            eprintln!(
-                                "[pending_tracker] LATE SELL booked {:.8} @ {:.0} (P/L: {:.2}%)",
-                                executed, booked_price, pnl_pct,
-                            );
+                let (notifier, session_for_notif) = {
+                    let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
+                    if executed > 0.0 {
+                        let target_price = p.target_price.unwrap_or(0.0);
+                        let booked_price = if target_price > 0.0 { target_price } else {
+                            order.price.as_deref().and_then(|s| s.parse().ok()).unwrap_or(0.0)
+                        };
+                        let fee_rate = 0.0005;
+                        let session = live_repo::get_session(&conn, p.session_id)
+                            .map_err(|e| -> BoxErr { e.to_string().into() })?;
+                        if let Some(s) = session {
+                            // signal 명을 _late로 구분해 same-cycle synchronous 경로
+                            // (real_buy/real_sell)와의 더블북을 SQL에서 식별 가능하게.
+                            if p.side == "bid" {
+                                let _ = live_repo::insert_trade(
+                                    &conn, p.session_id, &now.to_rfc3339(), "buy",
+                                    booked_price, executed,
+                                    booked_price * executed * fee_rate,
+                                    "real_buy_late", None, None, true,
+                                );
+                                let _ = live_repo::update_session_cycle(
+                                    &conn, p.session_id,
+                                    s.last_cycle_ts.as_deref().unwrap_or(""),
+                                    s.last_signal.as_deref().unwrap_or(""),
+                                    "holding",
+                                    Some(booked_price), Some(executed),
+                                    s.current_equity.unwrap_or(s.initial_capital),
+                                    s.live_return,
+                                );
+                            } else if p.side == "ask" {
+                                let buy_price = s.current_buy_price.unwrap_or(0.0);
+                                let pnl = if buy_price > 0.0 {
+                                    (booked_price - buy_price) * executed
+                                } else { 0.0 };
+                                let pnl_pct = if buy_price > 0.0 {
+                                    (booked_price - buy_price) / buy_price * 100.0
+                                } else { 0.0 };
+                                let _ = live_repo::insert_trade(
+                                    &conn, p.session_id, &now.to_rfc3339(), "sell",
+                                    booked_price, executed,
+                                    booked_price * executed * fee_rate,
+                                    "real_sell_late", Some(pnl), Some(pnl_pct), true,
+                                );
+                                let _ = live_repo::update_session_cycle(
+                                    &conn, p.session_id,
+                                    s.last_cycle_ts.as_deref().unwrap_or(""),
+                                    s.last_signal.as_deref().unwrap_or(""),
+                                    "idle",
+                                    None, None,
+                                    s.current_equity.unwrap_or(s.initial_capital),
+                                    s.live_return,
+                                );
+                                eprintln!(
+                                    "[pending_tracker] LATE SELL booked {:.8} @ {:.0} (P/L: {:.2}%)",
+                                    executed, booked_price, pnl_pct,
+                                );
+                            }
                         }
                     }
-                }
-                live_repo::mark_pending_resolved(&conn, &p.uuid, "done", &now.to_rfc3339())
-                    .map_err(|e| -> BoxErr { e.to_string().into() })?;
+                    live_repo::mark_pending_resolved(&conn, &p.uuid, "done", &now.to_rfc3339())
+                        .map_err(|e| -> BoxErr { e.to_string().into() })?;
+
+                    let notifier = crate::notifications::manager::NotificationManager::from_db(&conn, 1);
+                    let session_for_notif = live_repo::get_session(&conn, p.session_id)
+                        .ok().flatten();
+                    (notifier, session_for_notif)
+                }; // ← MutexGuard dropped here
+
                 resolved += 1;
                 eprintln!("[pending_tracker] resolved DONE {} (executed={:.8})",
                     p.uuid, executed);
+
+                if executed > 0.0 {
+                    let price = p.target_price.unwrap_or(0.0);
+                    let label = session_for_notif.as_ref()
+                        .map(|s| s.label.clone())
+                        .unwrap_or_else(|| format!("session {}", p.session_id));
+                    if p.side == "bid" {
+                        let note = format!("late fill, {} (placed {})", label, p.placed_at);
+                        notifier.notify_trade_rich(
+                            "buy", &p.market, price, executed, None, Some(&note),
+                        ).await;
+                    } else if p.side == "ask" {
+                        let buy_price = session_for_notif.as_ref()
+                            .and_then(|s| s.current_buy_price).unwrap_or(0.0);
+                        let pnl_pct = if buy_price > 0.0 {
+                            (price - buy_price) / buy_price * 100.0
+                        } else { 0.0 };
+                        let note = format!("late fill, {} (placed {})", label, p.placed_at);
+                        notifier.notify_trade_rich(
+                            "sell", &p.market, price, executed, Some(pnl_pct), Some(&note),
+                        ).await;
+                    }
+                }
+                continue;
             }
             "cancel" => {
                 let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
