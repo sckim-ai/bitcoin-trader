@@ -83,9 +83,18 @@ pub async fn manual_sell(market: String, volume: f64, price: f64) -> Result<Stri
 pub struct ManualOrderArgs {
     pub market: String,            // "KRW-ETH" etc.
     pub side: String,              // "buy" | "sell"
-    pub krw_amount: Option<f64>,   // required for buy (Upbit ord_type="price")
-    pub volume: Option<f64>,       // required for sell (Upbit ord_type="market")
+    /// "market" or "limit". market=즉시 체결, limit=지정가 등록(미체결 가능).
+    #[serde(default = "default_ord_type")]
+    pub ord_type: String,
+    pub krw_amount: Option<f64>,   // buy + (market or limit)
+    pub volume: Option<f64>,       // sell + any, or buy+limit override
+    /// limit 주문일 때만 사용. 매수: 지정 가격, 매도: 호가.
+    pub limit_price: Option<f64>,
     pub session_id: Option<i64>,   // None → don't write to live_trades
+}
+
+fn default_ord_type() -> String {
+    "market".into()
 }
 
 #[derive(serde::Serialize)]
@@ -104,75 +113,118 @@ pub async fn manual_market_order(
 ) -> Result<ManualOrderResult, String> {
     let client = create_client()?;
 
-    // Sanity: which side + amount?
-    let order = match args.side.as_str() {
-        "buy" => {
-            let krw = args.krw_amount
-                .ok_or("krw_amount required for buy")?;
+    // 4 cases: (market, buy) / (market, sell) / (limit, buy) / (limit, sell).
+    // Limit-buy derives volume from KRW / target_price so the user only enters
+    // a single amount in either case (UI symmetry with market-buy).
+    let order = match (args.side.as_str(), args.ord_type.as_str()) {
+        ("buy", "market") => {
+            let krw = args.krw_amount.ok_or("krw_amount required for market buy")?;
             if krw < 5_000.0 {
                 return Err(format!("Upbit minimum 5,000 KRW (got {:.0})", krw));
             }
             client.place_market_buy(&args.market, krw).await?
         }
-        "sell" => {
-            let vol = args.volume.ok_or("volume required for sell")?;
-            if vol <= 0.0 {
-                return Err("volume must be > 0".into());
-            }
+        ("sell", "market") => {
+            let vol = args.volume.ok_or("volume required for market sell")?;
+            if vol <= 0.0 { return Err("volume must be > 0".into()); }
             client.place_market_sell(&args.market, vol).await?
         }
-        other => return Err(format!("invalid side: {other}")),
+        ("buy", "limit") => {
+            let price = args.limit_price.ok_or("limit_price required for limit buy")?;
+            if price <= 0.0 { return Err("limit_price must be > 0".into()); }
+            // volume can be supplied directly OR derived from krw_amount/price.
+            let volume = match (args.volume, args.krw_amount) {
+                (Some(v), _) if v > 0.0 => v,
+                (_, Some(krw)) if krw > 0.0 => (krw / price * 1e8).floor() / 1e8,
+                _ => return Err("limit buy: provide either volume or krw_amount".into()),
+            };
+            // Sanity: notional must clear Upbit minimum.
+            if volume * price < 5_000.0 {
+                return Err(format!(
+                    "limit buy notional too small: {:.8} × {:.0} = {:.0} KRW (min 5,000)",
+                    volume, price, volume * price
+                ));
+            }
+            client.place_limit_buy_typed(&args.market, volume, price).await?
+        }
+        ("sell", "limit") => {
+            let vol = args.volume.ok_or("volume required for limit sell")?;
+            let price = args.limit_price.ok_or("limit_price required for limit sell")?;
+            if vol <= 0.0 || price <= 0.0 {
+                return Err("limit sell: volume and limit_price must be > 0".into());
+            }
+            client.place_limit_sell_typed(&args.market, vol, price).await?
+        }
+        (side, ord) => return Err(format!("invalid (side, ord_type) = ({}, {})", side, ord)),
     };
 
     // Optionally write to live_trades so the History page picks it up.
+    // Limit orders that come back wait (unfilled) are NOT booked — sitting
+    // in Upbit's book, not yet a real fill. User can verify via Upbit app.
+    // Market orders typically return done immediately, but if the immediate
+    // response has executed_volume=0 (still settling), we still book using
+    // estimated values so the user sees the trade in history.
     if let Some(sid) = args.session_id {
-        // We need a price reference for the booked row. Market buys often
-        // return wait/done with executed_volume = 0 in the immediate
-        // response; pull current ticker as a best-effort fill price.
-        let current_price = client.get_current_price(&args.market).await
-            .unwrap_or(0.0);
         let executed = order.executed_volume_f64();
-        let fee_rate = 0.0005;
-        let now_ts = chrono::Utc::now().to_rfc3339();
-        let conn = state.db.lock().map_err(|e| e.to_string())?;
-
-        let booked_volume = if executed > 0.0 {
-            executed
-        } else if args.side == "buy" {
-            // Estimate from KRW / price.
-            args.krw_amount.unwrap_or(0.0) / current_price.max(1.0) * (1.0 - fee_rate)
+        let is_limit_unfilled = args.ord_type == "limit" && !order.is_done();
+        if is_limit_unfilled {
+            // Limit registered but not filled — leave for user to track on Upbit.
         } else {
-            args.volume.unwrap_or(0.0)
-        };
-
-        if booked_volume > 0.0 && current_price > 0.0 {
-            // For sell, compute pnl against the session's stored buy_price
-            // (best effort — manual orders bypass the session's strategy
-            // so the attribution may not be perfect).
-            let (pnl, pnl_pct) = if args.side == "sell" {
-                let buy_price: f64 = conn.query_row(
-                    "SELECT COALESCE(current_buy_price, 0) FROM live_sessions WHERE id = ?1",
-                    [sid],
-                    |r| r.get(0),
-                ).unwrap_or(0.0);
-                if buy_price > 0.0 {
-                    let pnl = (current_price - buy_price) * booked_volume;
-                    let pnl_pct = (current_price - buy_price) / buy_price * 100.0;
-                    (Some(pnl), Some(pnl_pct))
-                } else {
-                    (None, None)
-                }
+            // For limit-done we know the fill price; for market we use ticker
+            // as an estimate (Upbit market response often omits avg price).
+            let current_price = client.get_current_price(&args.market).await
+                .unwrap_or(0.0);
+            let booked_price = if args.ord_type == "limit" {
+                args.limit_price.unwrap_or(current_price)
             } else {
-                (None, None)
+                current_price
+            };
+            let fee_rate = 0.0005;
+            let booked_volume = if executed > 0.0 {
+                executed
+            } else if args.side == "buy" {
+                let krw = args.krw_amount.unwrap_or(0.0);
+                krw / booked_price.max(1.0) * (1.0 - fee_rate)
+            } else {
+                args.volume.unwrap_or(0.0)
             };
 
-            let signal_name = if args.side == "buy" { "manual_buy" } else { "manual_sell" };
-            crate::db::live_repo::insert_trade(
-                &conn, sid, &now_ts, &args.side,
-                current_price, booked_volume,
-                current_price * booked_volume * fee_rate,
-                signal_name, pnl, pnl_pct, true, // is_real=1
-            ).map_err(|e| format!("DB insert failed: {e}"))?;
+            if booked_volume > 0.0 && booked_price > 0.0 {
+                let now_ts = chrono::Utc::now().to_rfc3339();
+                let conn = state.db.lock().map_err(|e| e.to_string())?;
+
+                let (pnl, pnl_pct) = if args.side == "sell" {
+                    let buy_price: f64 = conn.query_row(
+                        "SELECT COALESCE(current_buy_price, 0) FROM live_sessions WHERE id = ?1",
+                        [sid],
+                        |r| r.get(0),
+                    ).unwrap_or(0.0);
+                    if buy_price > 0.0 {
+                        let pnl = (booked_price - buy_price) * booked_volume;
+                        let pnl_pct = (booked_price - buy_price) / buy_price * 100.0;
+                        (Some(pnl), Some(pnl_pct))
+                    } else {
+                        (None, None)
+                    }
+                } else {
+                    (None, None)
+                };
+
+                // signal: manual_buy / manual_sell / manual_buy_limit / manual_sell_limit
+                let signal_name = match (args.side.as_str(), args.ord_type.as_str()) {
+                    ("buy", "limit") => "manual_buy_limit",
+                    ("sell", "limit") => "manual_sell_limit",
+                    ("buy", _) => "manual_buy",
+                    ("sell", _) => "manual_sell",
+                    _ => "manual_other",
+                };
+                crate::db::live_repo::insert_trade(
+                    &conn, sid, &now_ts, &args.side,
+                    booked_price, booked_volume,
+                    booked_price * booked_volume * fee_rate,
+                    signal_name, pnl, pnl_pct, true, // is_real=1
+                ).map_err(|e| format!("DB insert failed: {e}"))?;
+            }
         }
     }
 

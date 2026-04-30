@@ -44,6 +44,8 @@ function formatSignal(signal: string): string {
     case "real_sell_late": return "sell (late)";
     case "manual_buy": return "buy (manual)";
     case "manual_sell": return "sell (manual)";
+    case "manual_buy_limit": return "buy (manual, limit)";
+    case "manual_sell_limit": return "sell (manual, limit)";
     default: return signal;
   }
 }

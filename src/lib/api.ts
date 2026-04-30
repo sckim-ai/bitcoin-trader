@@ -331,10 +331,14 @@ export async function testUpbitConnection(): Promise<number> {
 export interface ManualOrderArgs {
   market: string;
   side: "buy" | "sell";
-  /** required for buy (Upbit ord_type="price"). */
+  /** "market" (즉시 체결) or "limit" (지정가 등록 — 미체결 가능). */
+  ord_type?: "market" | "limit";
+  /** market+buy or limit+buy (volume 미지정 시 limit_price로 자동 환산). */
   krw_amount?: number;
-  /** required for sell (Upbit ord_type="market"). */
+  /** sell+any 또는 limit+buy(volume 직접 지정). */
   volume?: number;
+  /** limit 주문일 때만 필수. */
+  limit_price?: number;
   /** Attribute the resulting fill to a session — writes is_real=1 row to live_trades. */
   session_id?: number;
 }
