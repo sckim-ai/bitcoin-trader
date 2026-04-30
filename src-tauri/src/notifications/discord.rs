@@ -16,17 +16,31 @@ impl DiscordClient {
 
     pub async fn send(&self, message: &str) -> Result<(), Box<dyn std::error::Error>> {
         let payload = json!({ "content": message });
+        self.post_payload(&payload).await
+    }
 
+    /// Send a fully-formed Discord webhook payload (e.g. `{embeds: [...]}` ).
+    /// Allows callers to assemble rich embeds without re-implementing the
+    /// transport. Embeds give us titled/coloured/field-structured messages
+    /// that plain `content` can't express — direct port of the legacy
+    /// DiscordNotificationService formatting.
+    pub async fn send_payload(
+        &self,
+        payload: &serde_json::Value,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.post_payload(payload).await
+    }
+
+    async fn post_payload(
+        &self,
+        payload: &serde_json::Value,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let resp = self.client
             .post(&self.webhook_url)
             .header("Content-Type", "application/json")
-            .json(&payload)
+            .json(payload)
             .send()
             .await?;
-
-        // Discord webhook returns 204 No Content on success; 200~299 covers
-        // any future variant. Anything else is an error we want to surface
-        // (404 = bad URL, 401 = revoked, 429 = rate-limit, etc.).
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();

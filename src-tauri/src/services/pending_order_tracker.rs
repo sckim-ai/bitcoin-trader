@@ -140,10 +140,15 @@ pub async fn reconcile_pending_orders(
                     let label = session_for_notif.as_ref()
                         .map(|s| s.label.clone())
                         .unwrap_or_else(|| format!("session {}", p.session_id));
+                    let note = format!("late fill (placed {})", p.placed_at);
+                    let ctx = crate::notifications::manager::TradeContext {
+                        session_label: Some(&label),
+                        note: Some(&note),
+                        ..Default::default()
+                    };
                     if p.side == "bid" {
-                        let note = format!("late fill, {} (placed {})", label, p.placed_at);
-                        notifier.notify_trade_full(
-                            "buy", &p.market, price, executed, None, Some(&note), true,
+                        notifier.notify_trade_embed(
+                            "buy", &p.market, price, executed, None, &ctx, true,
                         ).await;
                     } else if p.side == "ask" {
                         let buy_price = session_for_notif.as_ref()
@@ -151,9 +156,8 @@ pub async fn reconcile_pending_orders(
                         let pnl_pct = if buy_price > 0.0 {
                             (price - buy_price) / buy_price * 100.0
                         } else { 0.0 };
-                        let note = format!("late fill, {} (placed {})", label, p.placed_at);
-                        notifier.notify_trade_full(
-                            "sell", &p.market, price, executed, Some(pnl_pct), Some(&note), true,
+                        notifier.notify_trade_embed(
+                            "sell", &p.market, price, executed, Some(pnl_pct), &ctx, true,
                         ).await;
                     }
                 }

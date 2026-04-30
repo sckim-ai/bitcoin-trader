@@ -46,52 +46,96 @@ pub fn save_notification_config(
 ///   6. 매수 늦은 체결 (notify_trade_full buy, late=true)
 #[tauri::command]
 pub async fn test_trade_notifications(state: State<'_, AppState>) -> Result<String, String> {
+    use crate::notifications::manager::TradeContext;
+
     let mgr = {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
         crate::notifications::manager::NotificationManager::from_db(&conn, DEFAULT_USER_ID)
     };
 
     let market = "KRW-ETH";
-    let session = Some("Long_V3.1_1288% (TEST)");
+    let session_label = "Long_V3.1_1288% (TEST)";
+    let initial = 50_000.0;
     let price = 3_400_000.0;
     let qty = 0.00294118;
 
+    // 풍부한 샘플 컨텍스트 — buy 후 잔고 추정 + 세션 시작 + 세션 P/L.
+    let buy_krw = 39_975.0; // 50K - 10K(매수에 쓴 금액) + 잔여
+    let buy_coin = qty;
+    let buy_total = buy_krw + buy_coin * price;
+    let buy_session_pnl = buy_total / initial * 100.0 - 100.0;
+    let buy_note = "TEST · 1 chunks done / 0 wait".to_string();
+    let buy_ctx = TradeContext {
+        krw_balance: Some(buy_krw),
+        coin_balance: Some(buy_coin),
+        coin_currency: Some("ETH"),
+        coin_price: Some(price),
+        total_value_krw: Some(buy_total),
+        session_label: Some(session_label),
+        session_initial: Some(initial),
+        session_pnl_pct: Some(buy_session_pnl),
+        note: Some(&buy_note),
+    };
+
+    // sell 후 잔고: 코인 매도 → KRW 회수.
+    let sell_price = price + 58_140.0;
+    let sell_krw = 39_975.0 + sell_price * qty;
+    let sell_coin = 0.0;
+    let sell_total = sell_krw;
+    let sell_session_pnl = sell_total / initial * 100.0 - 100.0;
+    let sell_note = "TEST · 1 chunks done / 0 wait".to_string();
+    let sell_ctx = TradeContext {
+        krw_balance: Some(sell_krw),
+        coin_balance: Some(sell_coin),
+        coin_currency: Some("ETH"),
+        coin_price: Some(price),
+        total_value_krw: Some(sell_total),
+        session_label: Some(session_label),
+        session_initial: Some(initial),
+        session_pnl_pct: Some(sell_session_pnl),
+        note: Some(&sell_note),
+    };
+
+    let late_note = "TEST · late fill (placed 2026-04-30T10:00:00Z)".to_string();
+    let late_ctx = TradeContext {
+        session_label: Some(session_label),
+        note: Some(&late_note),
+        ..Default::default()
+    };
+
     // 1) buy ready
-    mgr.notify_ready(market, "buy", price, session).await;
+    mgr.notify_ready_embed(market, "buy", price, Some(session_label)).await;
     tokio::time::sleep(std::time::Duration::from_millis(800)).await;
 
     // 2) sell ready
-    mgr.notify_ready(market, "sell", price + 50_000.0, session).await;
+    mgr.notify_ready_embed(market, "sell", price + 50_000.0, Some(session_label)).await;
     tokio::time::sleep(std::time::Duration::from_millis(800)).await;
 
-    // 3) buy executed (immediate)
-    mgr.notify_trade_full(
-        "buy", market, price, qty, None,
-        Some("TEST · 1 chunks done / 0 wait"),
-        false,
+    // 3) buy executed (immediate, with balance + session)
+    mgr.notify_trade_embed(
+        "buy", market, price, qty, None, &buy_ctx, false,
     ).await;
     tokio::time::sleep(std::time::Duration::from_millis(800)).await;
 
-    // 4) sell executed (immediate, with profit)
-    mgr.notify_trade_full(
-        "sell", market, price + 58_140.0, qty, Some(1.71),
-        Some("TEST · 1 chunks done / 0 wait"),
-        false,
+    // 4) sell executed (immediate, with profit + balance + session)
+    mgr.notify_trade_embed(
+        "sell", market, sell_price, qty, Some(1.71),
+        &sell_ctx, false,
     ).await;
     tokio::time::sleep(std::time::Duration::from_millis(800)).await;
 
     // 5) limit-buy registered, not yet filled
-    mgr.notify_order_registered(market, "buy", price - 20_000.0, session).await;
+    mgr.notify_order_registered_embed(
+        market, "buy", price - 20_000.0, Some(session_label),
+    ).await;
     tokio::time::sleep(std::time::Duration::from_millis(800)).await;
 
     // 6) late fill (tracker found a wait order completed across cycles)
-    mgr.notify_trade_full(
-        "buy", market, price, qty, None,
-        Some("TEST · late fill, Long_V3.1 (placed 2026-04-30T10:00:00Z)"),
-        true,
+    mgr.notify_trade_embed(
+        "buy", market, price, qty, None, &late_ctx, true,
     ).await;
 
-    Ok("6개 메시지 전송 완료 — Discord/Telegram/FCM 채널을 확인하세요.".to_string())
+    Ok("6개 메시지 전송 완료 — Discord embed로 형식 확인하세요.".to_string())
 }
 
 /// Test a notification channel — independent of `enabled` flag. The intent

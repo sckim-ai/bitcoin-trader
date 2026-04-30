@@ -452,15 +452,33 @@ async fn real_reconcile_step<'a>(
                     result.orders.len(), done_orders.len(), wait_orders.len(), done_executed,
                 );
                 if done_executed > 0.0 {
+                    // 매수 후 잔고 — 매수에 들어간 KRW만큼 줄고, 코인이 늘어남.
+                    // 즉시 reconcile 전이라 추정값 사용 (다음 cycle reconcile에서 정확화).
+                    let estimated_krw = krw_balance - order_krw;
+                    let estimated_coin = coin_balance + done_executed;
+                    let total_value = estimated_krw + estimated_coin * current_price;
+                    let session_pnl = total_value / session.initial_capital * 100.0 - 100.0;
                     let note = format!(
-                        "session {} ({}), {} chunks done / {} wait",
-                        session.id, session.label, done_orders.len(), wait_orders.len(),
+                        "{} chunks done / {} wait",
+                        done_orders.len(), wait_orders.len(),
                     );
-                    notifier.notify_trade_rich(
-                        "buy", &session.market, target_price, done_executed, None, Some(&note),
+                    let ctx = crate::notifications::manager::TradeContext {
+                        krw_balance: Some(estimated_krw),
+                        coin_balance: Some(estimated_coin),
+                        coin_currency: Some(currency),
+                        coin_price: Some(current_price),
+                        total_value_krw: Some(total_value),
+                        session_label: Some(&session.label),
+                        session_initial: Some(session.initial_capital),
+                        session_pnl_pct: Some(session_pnl),
+                        note: Some(&note),
+                    };
+                    notifier.notify_trade_embed(
+                        "buy", &session.market, target_price, done_executed,
+                        None, &ctx, false,
                     ).await;
                 } else if !wait_orders.is_empty() {
-                    notifier.notify_order_registered(
+                    notifier.notify_order_registered_embed(
                         &session.market, "buy", target_price, Some(&session.label),
                     ).await;
                 }
@@ -526,16 +544,32 @@ async fn real_reconcile_step<'a>(
                     let pnl_pct = if rec_buy_price > 0.0 {
                         (target_price - rec_buy_price) / rec_buy_price * 100.0
                     } else { 0.0 };
+                    // 매도 후 잔고: 코인은 done_executed 만큼 줄고, KRW는 매도가 × 수량 만큼 늘어남.
+                    let estimated_coin = (coin_balance - done_executed).max(0.0);
+                    let estimated_krw = krw_balance + target_price * done_executed;
+                    let total_value = estimated_krw + estimated_coin * current_price;
+                    let session_pnl = total_value / session.initial_capital * 100.0 - 100.0;
                     let note = format!(
-                        "session {} ({}), {} chunks done / {} wait",
-                        session.id, session.label, done_orders.len(), wait_orders.len(),
+                        "{} chunks done / {} wait",
+                        done_orders.len(), wait_orders.len(),
                     );
-                    notifier.notify_trade_rich(
+                    let ctx = crate::notifications::manager::TradeContext {
+                        krw_balance: Some(estimated_krw),
+                        coin_balance: Some(estimated_coin),
+                        coin_currency: Some(currency),
+                        coin_price: Some(current_price),
+                        total_value_krw: Some(total_value),
+                        session_label: Some(&session.label),
+                        session_initial: Some(session.initial_capital),
+                        session_pnl_pct: Some(session_pnl),
+                        note: Some(&note),
+                    };
+                    notifier.notify_trade_embed(
                         "sell", &session.market, target_price, done_executed,
-                        Some(pnl_pct), Some(&note),
+                        Some(pnl_pct), &ctx, false,
                     ).await;
                 } else if !wait_orders.is_empty() {
-                    notifier.notify_order_registered(
+                    notifier.notify_order_registered_embed(
                         &session.market, "sell", target_price, Some(&session.label),
                     ).await;
                 }
@@ -554,11 +588,11 @@ async fn real_reconcile_step<'a>(
         // LiveTradingService.cs:1726-1756.
         "buy ready" if prev_signal != "buy ready" => {
             crate::live_log!("[realcycle] notify BUY READY (transition from '{}')", prev_signal);
-            notifier.notify_ready(&session.market, "buy", target_price, Some(&session.label)).await;
+            notifier.notify_ready_embed(&session.market, "buy", target_price, Some(&session.label)).await;
         }
         "sell ready" if prev_signal != "sell ready" => {
             crate::live_log!("[realcycle] notify SELL READY (transition from '{}')", prev_signal);
-            notifier.notify_ready(&session.market, "sell", target_price, Some(&session.label)).await;
+            notifier.notify_ready_embed(&session.market, "sell", target_price, Some(&session.label)).await;
         }
         _ => {} // hold / ready / repeated ready — no action
     }
