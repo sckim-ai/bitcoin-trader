@@ -1,6 +1,17 @@
 # Real Auto-Trading (Phase 4A) Master Plan
 
-> **Status (2026-04-29)**: 코드 단계(4A.1 ~ 4A.7) 모두 완료. **사용자 E2E 검증 대기**.
+> **Status (2026-04-30)**: 4A.1~4A.7 완료 + **post-4A.7 정책 변경 적용**.
+>
+> 사용자 요구로 다음 3가지 정책 변경:
+> 1. **일일 손실 / 매매수 회로차단기 비활성화** — session_engine 0a 블록을 주석 처리. 가드 함수와 마이그레이션 011 컬럼은 향후 재활성화를 위해 보존. 자동 stop이 사라졌으므로 Kill switch(수동) + 1h pending timeout이 유일한 자동 안전벨트.
+> 2. **시장가 → 지정가 (last bar's close)** — order_executor가 target_price > 0이면 `place_limit_*_typed` 호출. 매수 volume = `floor(KRW/target × 1e8) / 1e8`.
+> 3. **다음 봉 close 재주문** — cycle 진입 시 같은 세션의 wait 주문 모두 cancel → 새 close에 다시 주문. tracker가 done 발견 시 `live_trades(real_*_late)` row 추가해 늦은 체결도 P/L에 반영.
+>
+> 위험 프로필 변화:
+> - 시장가의 슬리피지 ↔ 지정가의 미체결 / 가격 추격으로 트레이드오프 이동
+> - 자동 자본 보호 사라짐 — 수동 모니터링 책임 사용자에게
+>
+> 회귀 가드(safety_circuit_breaker_test 8 케이스)는 함수 자체를 테스트하므로 그대로 통과 — 0a 블록을 다시 활성화하면 즉시 작동.
 > 자동 검증 진척: `cargo build --tests` 통과, `cum_return_parity` 5/5,
 > 신규 통합 테스트 ([safety_circuit_breaker_test](../../src-tauri/tests/safety_circuit_breaker_test.rs)
 > 8 케이스, [multi_real_test](../../src-tauri/tests/multi_real_test.rs) 8 케이스,

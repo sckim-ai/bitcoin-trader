@@ -228,6 +228,60 @@ impl UpbitClient {
     // async tasks without dragging non-Send dyn Error trait objects across
     // .await boundaries.
 
+    /// Limit BUY at a target price. `volume` × `target_price` ≈ KRW spent.
+    /// Returns parsed OrderResponse (Send-safe String error). Used by 4A.x's
+    /// post-4A.7 limit-mode order_executor; immediate response may be
+    /// `state="wait"` if the book has no matching ask at target_price.
+    pub async fn place_limit_buy_typed(
+        &self,
+        market: &str,
+        volume: f64,
+        target_price: f64,
+    ) -> Result<OrderResponse, String> {
+        self.place_limit_typed(market, "bid", volume, target_price).await
+    }
+
+    /// Limit SELL at a target price.
+    pub async fn place_limit_sell_typed(
+        &self,
+        market: &str,
+        volume: f64,
+        target_price: f64,
+    ) -> Result<OrderResponse, String> {
+        self.place_limit_typed(market, "ask", volume, target_price).await
+    }
+
+    async fn place_limit_typed(
+        &self,
+        market: &str,
+        side: &str,
+        volume: f64,
+        target_price: f64,
+    ) -> Result<OrderResponse, String> {
+        let volume_str = format!("{:.8}", volume);
+        // Upbit accepts integer KRW for ETH/BTC pairs; format with no decimals
+        // matches the form the legacy C# client used.
+        let price_str = format!("{}", target_price.round() as u64);
+        let query = format!(
+            "market={}&side={}&volume={}&price={}&ord_type=limit",
+            market, side, volume_str, price_str
+        );
+        let query_hash = Self::hash_query(&query);
+        let token = self
+            .generate_token(Some(&query_hash))
+            .map_err(|e| format!("token: {e}"))?;
+
+        let body = serde_json::json!({
+            "market": market,
+            "side": side,
+            "volume": volume_str,
+            "price": price_str,
+            "ord_type": "limit",
+        });
+
+        self.send_order(&token, body).await
+    }
+
     /// Market BUY using KRW. `krw_amount` is the total quote currency to spend.
     pub async fn place_market_buy(
         &self,

@@ -64,17 +64,26 @@ pub fn split_sell_chunks(total_volume: f64, current_price: f64) -> Vec<f64> {
         .collect()
 }
 
-/// Execute a split market BUY. Returns one OrderResponse per filled chunk.
+/// Execute a split BUY. If `target_price > 0` → limit orders at target_price
+/// (post-4A.7 default policy: peg at the last bar's close). If 0 → market.
 pub async fn execute_split_buy(
     client: &UpbitClient,
     market: &str,
     total_krw: f64,
+    target_price: f64,
 ) -> SplitOrderResult {
     let chunks = split_buy_chunks(total_krw);
     let n = chunks.len();
     let mut out = SplitOrderResult::default();
     for (i, amount) in chunks.iter().enumerate() {
-        match client.place_market_buy(market, *amount).await {
+        let result = if target_price > 0.0 {
+            // Limit: derive volume from KRW / target_price (8-decimal floor).
+            let volume = (amount / target_price * 1e8).floor() / 1e8;
+            client.place_limit_buy_typed(market, volume, target_price).await
+        } else {
+            client.place_market_buy(market, *amount).await
+        };
+        match result {
             Ok(order) => {
                 out.orders.push(order);
                 out.success = true;
@@ -91,18 +100,24 @@ pub async fn execute_split_buy(
     out
 }
 
-/// Execute a split market SELL. Returns one OrderResponse per filled chunk.
+/// Execute a split SELL. `target_price > 0` → limit, 0 → market.
 pub async fn execute_split_sell(
     client: &UpbitClient,
     market: &str,
     total_volume: f64,
     current_price: f64,
+    target_price: f64,
 ) -> SplitOrderResult {
     let chunks = split_sell_chunks(total_volume, current_price);
     let n = chunks.len();
     let mut out = SplitOrderResult::default();
     for (i, vol) in chunks.iter().enumerate() {
-        match client.place_market_sell(market, *vol).await {
+        let result = if target_price > 0.0 {
+            client.place_limit_sell_typed(market, *vol, target_price).await
+        } else {
+            client.place_market_sell(market, *vol).await
+        };
+        match result {
             Ok(order) => {
                 out.orders.push(order);
                 out.success = true;

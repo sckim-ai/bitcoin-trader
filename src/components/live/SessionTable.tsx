@@ -94,10 +94,10 @@ export default function SessionTable({
                   </Badge>
                   {s.mode === "real" && (
                     <span
-                      className="text-[10px] text-zinc-500 font-data"
-                      title={`Auto-stop when today's loss ≤ ${s.max_daily_loss_pct}% or sells reach ${s.max_daily_trades}`}
+                      className="text-[10px] text-zinc-600 font-data italic"
+                      title="Daily loss / trade-count auto-stop is currently disabled. Use Kill switch for manual emergency stop."
                     >
-                      ≤{s.max_daily_loss_pct}% / {s.max_daily_trades}t
+                      limits off
                     </span>
                   )}
                 </div>

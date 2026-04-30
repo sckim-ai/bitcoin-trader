@@ -212,6 +212,45 @@ pub async fn run_session_cycle(
     })
 }
 
+/// Cancel all wait-state orders for a single session. Called at the start
+/// of every real cycle so the next limit order can be re-pegged at the
+/// new bar's close. If Upbit reports the order is already done by the
+/// time we try to cancel, that's fine — the tracker will surface it as
+/// done on the same cycle's reconcile.
+async fn cancel_session_wait_orders(
+    db: &Arc<Mutex<Connection>>,
+    upbit: &crate::api::upbit::UpbitClient,
+    session_id: i64,
+) -> Result<usize, BoxErr> {
+    let pendings = {
+        let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
+        live_repo::list_session_pending_wait(&conn, session_id)
+            .map_err(|e| -> BoxErr { e.to_string().into() })?
+    };
+    if pendings.is_empty() {
+        return Ok(0);
+    }
+    let now = Utc::now().to_rfc3339();
+    let mut cancelled = 0usize;
+    for p in pendings {
+        match upbit.cancel_order(&p.uuid).await {
+            Ok(_) => {
+                let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
+                live_repo::mark_pending_resolved(&conn, &p.uuid, "cancel", &now)
+                    .map_err(|e| -> BoxErr { e.to_string().into() })?;
+                cancelled += 1;
+                eprintln!("[real cycle] re-peg cancel {} (was wait)", p.uuid);
+            }
+            Err(e) => {
+                // Most likely already filled or already cancelled — let the
+                // tracker resolve it on the very next reconcile pass.
+                eprintln!("[real cycle] cancel({}) returned: {e} — tracker will reconcile", p.uuid);
+            }
+        }
+    }
+    Ok(cancelled)
+}
+
 /// Real-mode reconcile + signal resolution + market order execution.
 /// Mutates the position snapshot (`current_position`/`cbp`/`cbv`) and
 /// `last_signal` in place so the caller can persist a single coherent state.
@@ -239,38 +278,29 @@ async fn real_reconcile_step<'a>(
     let upbit = crate::commands::upbit_keys::upbit_client_or_err()
         .map_err(|e| -> BoxErr { e.into() })?;
 
-    // 0a. Daily safety circuit breakers (Phase 4A.6).
-    //     Checked BEFORE pending reconcile / balance fetch so a tripped
-    //     limit immediately stops the session without making more API calls.
-    {
-        let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
-        let today_pnl_pct = live_repo::today_realized_pnl_pct(
-            &conn, session.id, session.initial_capital,
-        ).map_err(|e| -> BoxErr { e.to_string().into() })?;
-        let today_count = live_repo::today_real_trades_count(&conn, session.id)
-            .map_err(|e| -> BoxErr { e.to_string().into() })?;
+    // 0a. Daily safety circuit breakers — DISABLED by user request (post-4A.7).
+    //     The aggregation helpers (today_realized_pnl_pct /
+    //     today_real_trades_count) and the schema columns are kept so the
+    //     breaker can be re-enabled by uncommenting this block. The
+    //     safety_circuit_breaker_test cases still validate the helpers
+    //     themselves, just no longer the engine path.
+    //
+    //     Trade-off the user accepted: no auto-stop on runaway loss / loop.
+    //     Compensating controls remain — Kill switch (manual), 1h pending
+    //     timeout, dust gates, multi-real=1, signal resolution matrix.
 
-        // Loss threshold is negative; tripped when realized loss is *worse*.
-        let loss_tripped = today_pnl_pct <= session.max_daily_loss_pct;
-        let count_tripped = today_count >= session.max_daily_trades as i64;
-        if loss_tripped || count_tripped {
-            let reason = if loss_tripped {
-                format!("daily loss {:.2}% ≤ limit {:.2}%",
-                    today_pnl_pct, session.max_daily_loss_pct)
-            } else {
-                format!("daily trade count {} ≥ limit {}",
-                    today_count, session.max_daily_trades)
-            };
-            eprintln!("[real cycle] session={} CIRCUIT BREAKER tripped: {}", session.id, reason);
-            live_repo::set_session_status(&conn, session.id, "stopped")
-                .map_err(|e| -> BoxErr { e.to_string().into() })?;
-            // Position state untouched — user can review and decide.
-            return Ok(());
-        }
+    // 0b. Cancel this session's leftover wait orders so we can re-peg at
+    //     the new bar's close (post-4A.7 user-requested policy: limit
+    //     orders chase the close, one bar = one re-peg).
+    //     Done in the same step as pending reconcile so any fills that
+    //     completed BEFORE we cancel are still captured (the wait-but-
+    //     actually-done case Upbit sometimes returns).
+    if let Err(e) = cancel_session_wait_orders(db, &upbit, session.id).await {
+        eprintln!("[real cycle] session={} cancel-wait error: {e}", session.id);
     }
-
-    // 0b. Reconcile any leftover wait-state orders FIRST so this cycle's
-    //    balance fetch reflects the latest fills. (Phase 4A.5)
+    // 0c. Reconcile any remaining wait-state orders (other sessions or
+    //     newly arrived state changes). Done orders are surfaced to
+    //     live_trades by the tracker. (Phase 4A.5)
     if let Err(e) = crate::services::pending_order_tracker::reconcile_pending_orders(db, &upbit).await {
         eprintln!("[real cycle] session={} pending reconcile error: {e}", session.id);
     }
@@ -337,102 +367,138 @@ async fn real_reconcile_step<'a>(
     let mut applied_buy_price: Option<f64> = if status == "holding" { Some(rec_buy_price) } else { None };
     let mut applied_buy_volume: Option<f64> = if status == "holding" { Some(rec_buy_volume) } else { None };
 
-    // ─── Order execution ───
+    // ─── Order execution (post-4A.7: limit orders pegged at last bar's close) ───
+    //
+    // Post-4A.7 policy change (user request):
+    //   - Use LIMIT orders at the last confirmed bar's close, not market.
+    //   - Immediate-fill (state="done") → book to live_trades + flip position
+    //     synchronously, same as before.
+    //   - Wait (unfilled) → record only in pending_orders. Position is
+    //     unchanged this cycle; next cycle's reconcile_pending_orders +
+    //     balance fetch will see the eventual fill (or cancel + re-peg).
+    //
+    // The "next bar close re-peg" behaviour comes for free: this cycle's
+    // wait orders will be cancelled at the start of the next cycle (see
+    // cancel_session_wait_orders in the entry block), and a fresh order
+    // gets placed against THIS bar's close — which IS the previous bar's
+    // close from next cycle's POV.
     use crate::services::order_executor::{execute_split_buy, execute_split_sell, MIN_ORDER_KRW};
     let now_ts = Utc::now().to_rfc3339();
-    let fee_rate = 0.0005; // Upbit market-order fee (KRW pairs)
+    let fee_rate = 0.0005;
+    // Target price = last confirmed bar's close. Falls back to current_price
+    // if the data window has no close (shouldn't happen in production).
+    let target_price = confirmed
+        .last()
+        .map(|m| m.candle.close)
+        .unwrap_or(current_price);
 
     match final_signal {
         "buy" if krw_balance > MIN_ORDER_KRW => {
-            // Reserve 0.05% headroom for fee + price drift.
             let order_krw = krw_balance * 0.9995;
-            eprintln!("[real BUY] session={} {:.0} KRW", session.id, order_krw);
-            let result = execute_split_buy(&upbit, &session.market, order_krw).await;
+            eprintln!(
+                "[real BUY] session={} {:.0} KRW @ limit {:.0} (close)",
+                session.id, order_krw, target_price,
+            );
+            let result = execute_split_buy(&upbit, &session.market, order_krw, target_price).await;
             if !result.success {
                 eprintln!("[real BUY] FAILED — all chunks failed: {:?}", result.errors);
             } else {
-                // Compute totals from the chunks that succeeded. Upbit market
-                // buys can return executed_volume=0 in the immediate response
-                // (still settling); we conservatively fall back to estimating
-                // from the requested KRW / price. Phase 4A.5 will add
-                // get_order polling to refine these numbers.
-                let total_executed: f64 = result.orders.iter()
-                    .map(|o| o.executed_volume_f64())
-                    .sum();
-                let estimated = order_krw / current_price * (1.0 - fee_rate);
-                let booked_volume = if total_executed > 0.0 { total_executed } else { estimated };
-                let booked_price = current_price;
+                // Split done vs wait. Only the done chunks book into
+                // live_trades immediately; wait chunks stay in pending_orders
+                // for the tracker to settle on a future cycle.
+                let done_orders: Vec<_> = result.orders.iter().filter(|o| o.is_done()).collect();
+                let wait_orders: Vec<_> = result.orders.iter().filter(|o| !o.is_done()).collect();
+                let done_executed: f64 = done_orders.iter()
+                    .map(|o| o.executed_volume_f64()).sum();
 
                 let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
-                live_repo::insert_trade(
-                    &conn, session.id, &now_ts, "buy",
-                    booked_price, booked_volume,
-                    booked_price * booked_volume * fee_rate,
-                    "real_buy", None, None, true, // is_real=1
-                ).map_err(|e| -> BoxErr { e.to_string().into() })?;
-                // Track each chunk in pending_orders so the next cycle's
-                // tracker can confirm/cancel any that came back as 'wait'.
-                for o in &result.orders {
+                if done_executed > 0.0 {
+                    let booked_price = target_price; // limit price ≈ fill price
+                    let booked_volume = done_executed;
+                    live_repo::insert_trade(
+                        &conn, session.id, &now_ts, "buy",
+                        booked_price, booked_volume,
+                        booked_price * booked_volume * fee_rate,
+                        "real_buy", None, None, true,
+                    ).map_err(|e| -> BoxErr { e.to_string().into() })?;
+                    applied_status = "holding";
+                    applied_buy_price = Some(booked_price);
+                    applied_buy_volume = Some(booked_volume);
+                }
+                for o in result.orders.iter() {
                     let initial = if o.is_done() { "done" } else { "wait" };
                     let _ = live_repo::insert_pending_order(
                         &conn, &o.uuid, session.id, "bid", &session.market,
-                        &o.ord_type, None, order_krw / result.orders.len() as f64,
+                        &o.ord_type, Some(target_price),
+                        order_krw / result.orders.len() as f64,
                         &now_ts, initial,
                     );
                 }
                 drop(conn);
-
-                applied_status = "holding";
-                applied_buy_price = Some(booked_price);
-                applied_buy_volume = Some(booked_volume);
                 eprintln!(
-                    "[real BUY] OK — vol={:.8} @ {:.0} (chunks={}, executed={:.8})",
-                    booked_volume, booked_price, result.orders.len(), total_executed,
+                    "[real BUY] chunks={} done={} wait={} executed={:.8}",
+                    result.orders.len(), done_orders.len(), wait_orders.len(), done_executed,
                 );
             }
         }
         "sell" if coin_balance * current_price > MIN_ORDER_KRW => {
-            eprintln!("[real SELL] session={} vol={:.8} @ ~{:.0}", session.id, coin_balance, current_price);
-            let result = execute_split_sell(&upbit, &session.market, coin_balance, current_price).await;
+            eprintln!(
+                "[real SELL] session={} vol={:.8} @ limit {:.0} (close)",
+                session.id, coin_balance, target_price,
+            );
+            let result = execute_split_sell(
+                &upbit, &session.market, coin_balance, current_price, target_price,
+            ).await;
             if !result.success {
                 eprintln!("[real SELL] FAILED — all chunks failed: {:?}", result.errors);
             } else {
-                let total_executed: f64 = result.orders.iter()
-                    .map(|o| o.executed_volume_f64())
-                    .sum();
-                let booked_volume = if total_executed > 0.0 { total_executed } else { coin_balance };
-                let booked_price = current_price;
-                let buy_price = rec_buy_price;
-                let pnl = if buy_price > 0.0 {
-                    (booked_price - buy_price) * booked_volume
-                } else { 0.0 };
-                let pnl_pct = if buy_price > 0.0 {
-                    (booked_price - buy_price) / buy_price * 100.0
-                } else { 0.0 };
+                let done_orders: Vec<_> = result.orders.iter().filter(|o| o.is_done()).collect();
+                let wait_orders: Vec<_> = result.orders.iter().filter(|o| !o.is_done()).collect();
+                let done_executed: f64 = done_orders.iter()
+                    .map(|o| o.executed_volume_f64()).sum();
 
                 let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
-                live_repo::insert_trade(
-                    &conn, session.id, &now_ts, "sell",
-                    booked_price, booked_volume,
-                    booked_price * booked_volume * fee_rate,
-                    "real_sell", Some(pnl), Some(pnl_pct), true, // is_real=1
-                ).map_err(|e| -> BoxErr { e.to_string().into() })?;
-                for o in &result.orders {
+                if done_executed > 0.0 {
+                    let booked_price = target_price;
+                    let booked_volume = done_executed;
+                    let buy_price = rec_buy_price;
+                    let pnl = if buy_price > 0.0 {
+                        (booked_price - buy_price) * booked_volume
+                    } else { 0.0 };
+                    let pnl_pct = if buy_price > 0.0 {
+                        (booked_price - buy_price) / buy_price * 100.0
+                    } else { 0.0 };
+                    live_repo::insert_trade(
+                        &conn, session.id, &now_ts, "sell",
+                        booked_price, booked_volume,
+                        booked_price * booked_volume * fee_rate,
+                        "real_sell", Some(pnl), Some(pnl_pct), true,
+                    ).map_err(|e| -> BoxErr { e.to_string().into() })?;
+                    // Position flip only when the entire balance was consumed
+                    // by done chunks. Partial fills (still some volume in
+                    // wait orders or balance remaining) keep position as is —
+                    // next cycle reconciles.
+                    let remaining = coin_balance - done_executed;
+                    if remaining * current_price < MIN_ORDER_KRW {
+                        applied_status = "idle";
+                        applied_buy_price = None;
+                        applied_buy_volume = None;
+                    }
+                    eprintln!("[real SELL] booked done={:.8} (P/L: {:.2}%)", booked_volume, pnl_pct);
+                }
+                for o in result.orders.iter() {
                     let initial = if o.is_done() { "done" } else { "wait" };
                     let _ = live_repo::insert_pending_order(
                         &conn, &o.uuid, session.id, "ask", &session.market,
-                        &o.ord_type, None, coin_balance / result.orders.len() as f64,
+                        &o.ord_type, Some(target_price),
+                        coin_balance / result.orders.len() as f64,
                         &now_ts, initial,
                     );
                 }
                 drop(conn);
-
-                applied_status = "idle";
-                applied_buy_price = None;
-                applied_buy_volume = None;
                 eprintln!(
-                    "[real SELL] OK — vol={:.8} @ {:.0} (P/L: {:.2}%)",
-                    booked_volume, booked_price, pnl_pct,
+                    "[real SELL] chunks={} done={} wait={}",
+                    result.orders.len(), done_orders.len(), wait_orders.len(),
                 );
             }
         }

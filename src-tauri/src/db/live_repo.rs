@@ -435,6 +435,23 @@ pub fn insert_pending_order(
     Ok(())
 }
 
+/// `wait`-state orders for a single session. Used at the start of every
+/// real cycle to find orders that need cancelling so we can re-peg at the
+/// new bar's close.
+pub fn list_session_pending_wait(
+    conn: &Connection,
+    session_id: i64,
+) -> Result<Vec<PendingOrder>> {
+    let mut stmt = conn.prepare(
+        "SELECT uuid, session_id, side, market, ord_type, target_price, requested,
+                placed_at, status, last_checked, resolved_at
+         FROM pending_orders WHERE session_id = ?1 AND status = 'wait'
+         ORDER BY placed_at ASC",
+    )?;
+    let rows = stmt.query_map([session_id], row_to_pending)?;
+    rows.collect()
+}
+
 /// All `wait`-state orders across all sessions. Tracker reconciles these
 /// at the start of every cycle.
 pub fn list_pending_wait(conn: &Connection) -> Result<Vec<PendingOrder>> {
