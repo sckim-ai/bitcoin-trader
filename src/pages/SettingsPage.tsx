@@ -108,8 +108,6 @@ export default function SettingsPage() {
     }
   };
 
-  const token = localStorage.getItem("auth_token") || "";
-
   const handleSaveNotif = async (channel: string) => {
     try {
       let config = "";
@@ -124,7 +122,7 @@ export default function SettingsPage() {
         config = JSON.stringify({ bot_token: telegramBotToken, chat_id: telegramChatId });
         enabled = telegramEnabled;
       }
-      await saveNotificationConfig(token, channel, config, enabled);
+      await saveNotificationConfig(channel, config, enabled);
       setNotifStatus((s) => ({ ...s, [channel]: "Saved!" }));
       setTimeout(() => setNotifStatus((s) => ({ ...s, [channel]: "" })), 2000);
     } catch (e: unknown) {
@@ -136,7 +134,7 @@ export default function SettingsPage() {
   const handleTestNotif = async (channel: string) => {
     try {
       setNotifStatus((s) => ({ ...s, [`${channel}_test`]: "Sending..." }));
-      await testNotification(token, channel);
+      await testNotification(channel);
       setNotifStatus((s) => ({ ...s, [`${channel}_test`]: "Sent!" }));
       setTimeout(() => setNotifStatus((s) => ({ ...s, [`${channel}_test`]: "" })), 2000);
     } catch (e: unknown) {

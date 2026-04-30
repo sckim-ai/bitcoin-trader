@@ -276,22 +276,20 @@ export async function deleteUser(token: string, userId: number): Promise<void> {
 }
 
 // --- Notification API ---
+// Aligned with the desktop single-user model: no auth token required.
+// Backend uses user_id=1 (default admin) like every other command.
 
 export async function saveNotificationConfig(
-  token: string,
   channel: string,
   config: string,
   enabled: boolean
 ): Promise<void> {
-  if (isTauri) return tauriInvoke("save_notification_config", { token, channel, config, enabled });
+  if (isTauri) return tauriInvoke("save_notification_config", { channel, config, enabled });
   throw new Error("Notification config via PWA not yet implemented");
 }
 
-export async function testNotification(
-  token: string,
-  channel: string
-): Promise<string> {
-  if (isTauri) return tauriInvoke("test_notification", { token, channel });
+export async function testNotification(channel: string): Promise<string> {
+  if (isTauri) return tauriInvoke("test_notification", { channel });
   throw new Error("Notification test via PWA not yet implemented");
 }
 
