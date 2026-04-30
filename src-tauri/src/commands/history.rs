@@ -134,7 +134,11 @@ pub fn export_real_trades_csv(
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     let trades = list_real_trades(filter, state)?;
-    let mut out = String::with_capacity(trades.len() * 80);
+    let mut out = String::with_capacity(trades.len() * 80 + 4);
+    // UTF-8 BOM so Korean Excel reads the file as UTF-8 and doesn't mangle
+    // timestamp/signal/Korean text. Other tools (Notepad, Google Sheets,
+    // pandas) ignore the BOM transparently.
+    out.push('\u{FEFF}');
     out.push_str("id,session_id,ts,side,signal,price,volume,fee,pnl,pnl_pct\n");
     for t in trades {
         // Numeric formatting:
