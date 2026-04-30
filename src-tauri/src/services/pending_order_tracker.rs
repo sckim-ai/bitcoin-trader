@@ -42,7 +42,7 @@ pub async fn reconcile_pending_orders(
         let placed = match DateTime::parse_from_rfc3339(&p.placed_at) {
             Ok(dt) => dt.with_timezone(&Utc),
             Err(e) => {
-                eprintln!("[pending_tracker] bad placed_at on {}: {e}", p.uuid);
+                crate::live_log!("[pending_tracker] bad placed_at on {}: {e}", p.uuid);
                 continue;
             }
         };
@@ -51,7 +51,7 @@ pub async fn reconcile_pending_orders(
         let order = match upbit.get_order(&p.uuid).await {
             Ok(o) => o,
             Err(e) => {
-                eprintln!("[pending_tracker] get_order({}) failed: {e}", p.uuid);
+                crate::live_log!("[pending_tracker] get_order({}) failed: {e}", p.uuid);
                 let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
                 let _ = live_repo::touch_pending_check(&conn, &p.uuid, &now.to_rfc3339());
                 continue;
@@ -132,7 +132,7 @@ pub async fn reconcile_pending_orders(
                 }; // ← MutexGuard dropped here
 
                 resolved += 1;
-                eprintln!("[pending_tracker] resolved DONE {} (executed={:.8})",
+                crate::live_log!("[pending_tracker] resolved DONE {} (executed={:.8})",
                     p.uuid, executed);
 
                 if executed > 0.0 {
@@ -164,7 +164,7 @@ pub async fn reconcile_pending_orders(
                 live_repo::mark_pending_resolved(&conn, &p.uuid, "cancel", &now.to_rfc3339())
                     .map_err(|e| -> BoxErr { e.to_string().into() })?;
                 resolved += 1;
-                eprintln!("[pending_tracker] resolved CANCEL {} (externally cancelled)", p.uuid);
+                crate::live_log!("[pending_tracker] resolved CANCEL {} (externally cancelled)", p.uuid);
             }
             _ => {
                 // Still 'wait' (or unknown). Cancel if past stale threshold.
@@ -183,7 +183,7 @@ pub async fn reconcile_pending_orders(
                             resolved += 1;
                         }
                         Err(e) => {
-                            eprintln!("[pending_tracker] cancel({}) failed: {e}", p.uuid);
+                            crate::live_log!("[pending_tracker] cancel({}) failed: {e}", p.uuid);
                             let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
                             let _ = live_repo::touch_pending_check(&conn, &p.uuid, &now.to_rfc3339());
                         }

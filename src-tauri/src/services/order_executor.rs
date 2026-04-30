@@ -90,7 +90,7 @@ pub async fn execute_split_buy(
             }
             Err(e) => {
                 out.errors.push(format!("buy chunk {}/{}: {}", i + 1, n, e));
-                eprintln!("[order_executor] buy chunk {}/{} failed: {}", i + 1, n, e);
+                crate::live_log!("[order_executor] buy chunk {}/{} failed: {}", i + 1, n, e);
             }
         }
         if i + 1 < n {
@@ -124,7 +124,7 @@ pub async fn execute_split_sell(
             }
             Err(e) => {
                 out.errors.push(format!("sell chunk {}/{}: {}", i + 1, n, e));
-                eprintln!("[order_executor] sell chunk {}/{} failed: {}", i + 1, n, e);
+                crate::live_log!("[order_executor] sell chunk {}/{} failed: {}", i + 1, n, e);
             }
         }
         if i + 1 < n {

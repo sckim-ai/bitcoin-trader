@@ -177,7 +177,7 @@ pub async fn run_session_cycle(
             db, &session, &data, &result,
             &mut current_position, &mut cbp, &mut cbv, &mut last_signal_str,
         ).await {
-            eprintln!("[real cycle] session={} reconcile error: {e}", session.id);
+            crate::live_log!("[realcycle] session={} reconcile error: {e}", session.id);
         }
     }
 
@@ -239,12 +239,12 @@ async fn cancel_session_wait_orders(
                 live_repo::mark_pending_resolved(&conn, &p.uuid, "cancel", &now)
                     .map_err(|e| -> BoxErr { e.to_string().into() })?;
                 cancelled += 1;
-                eprintln!("[real cycle] re-peg cancel {} (was wait)", p.uuid);
+                crate::live_log!("[realcycle] re-peg cancel {} (was wait)", p.uuid);
             }
             Err(e) => {
                 // Most likely already filled or already cancelled — let the
                 // tracker resolve it on the very next reconcile pass.
-                eprintln!("[real cycle] cancel({}) returned: {e} — tracker will reconcile", p.uuid);
+                crate::live_log!("[realcycle] cancel({}) returned: {e} — tracker will reconcile", p.uuid);
             }
         }
     }
@@ -296,13 +296,13 @@ async fn real_reconcile_step<'a>(
     //     completed BEFORE we cancel are still captured (the wait-but-
     //     actually-done case Upbit sometimes returns).
     if let Err(e) = cancel_session_wait_orders(db, &upbit, session.id).await {
-        eprintln!("[real cycle] session={} cancel-wait error: {e}", session.id);
+        crate::live_log!("[realcycle] session={} cancel-wait error: {e}", session.id);
     }
     // 0c. Reconcile any remaining wait-state orders (other sessions or
     //     newly arrived state changes). Done orders are surfaced to
     //     live_trades by the tracker. (Phase 4A.5)
     if let Err(e) = crate::services::pending_order_tracker::reconcile_pending_orders(db, &upbit).await {
-        eprintln!("[real cycle] session={} pending reconcile error: {e}", session.id);
+        crate::live_log!("[realcycle] session={} pending reconcile error: {e}", session.id);
     }
 
     let currency = session.market.split('-').nth(1).unwrap_or("ETH");
@@ -410,7 +410,7 @@ async fn real_reconcile_step<'a>(
             );
             let result = execute_split_buy(&upbit, &session.market, order_krw, target_price).await;
             if !result.success {
-                eprintln!("[real BUY] FAILED — all chunks failed: {:?}", result.errors);
+                crate::live_log!("[realBUY] FAILED — all chunks failed: {:?}", result.errors);
             } else {
                 // Split done vs wait. Only the done chunks book into
                 // live_trades immediately; wait chunks stay in pending_orders
@@ -477,7 +477,7 @@ async fn real_reconcile_step<'a>(
                 &upbit, &session.market, coin_balance, current_price, target_price,
             ).await;
             if !result.success {
-                eprintln!("[real SELL] FAILED — all chunks failed: {:?}", result.errors);
+                crate::live_log!("[realSELL] FAILED — all chunks failed: {:?}", result.errors);
             } else {
                 let done_orders: Vec<_> = result.orders.iter().filter(|o| o.is_done()).collect();
                 let wait_orders: Vec<_> = result.orders.iter().filter(|o| !o.is_done()).collect();
@@ -508,7 +508,7 @@ async fn real_reconcile_step<'a>(
                             applied_buy_price = None;
                             applied_buy_volume = None;
                         }
-                        eprintln!("[real SELL] booked done={:.8} (P/L: {:.2}%)", booked_volume, pnl_pct);
+                        crate::live_log!("[realSELL] booked done={:.8} (P/L: {:.2}%)", booked_volume, pnl_pct);
                     }
                     for o in result.orders.iter() {
                         let initial = if o.is_done() { "done" } else { "wait" };
@@ -546,10 +546,10 @@ async fn real_reconcile_step<'a>(
             }
         }
         "buy" => {
-            eprintln!("[real BUY skipped] insufficient KRW ({:.0} ≤ {:.0})", krw_balance, MIN_ORDER_KRW);
+            crate::live_log!("[realBUY skipped] insufficient KRW ({:.0} ≤ {:.0})", krw_balance, MIN_ORDER_KRW);
         }
         "sell" => {
-            eprintln!("[real SELL skipped] dust balance ({:.6} × {:.0} = {:.0} ≤ {:.0})",
+            crate::live_log!("[realSELL skipped] dust balance ({:.6} × {:.0} = {:.0} ≤ {:.0})",
                 coin_balance, current_price, coin_balance * current_price, MIN_ORDER_KRW);
         }
         // Ready signals: notify ONLY on first transition into the ready
@@ -557,11 +557,11 @@ async fn real_reconcile_step<'a>(
         // dedup key — same as legacy `_lastNotifiedSignal` in
         // LiveTradingService.cs:1726-1756.
         "buy ready" if prev_signal != "buy ready" => {
-            eprintln!("[real cycle] notify BUY READY (transition from '{}')", prev_signal);
+            crate::live_log!("[realcycle] notify BUY READY (transition from '{}')", prev_signal);
             notifier.notify_ready(&session.market, "buy", target_price).await;
         }
         "sell ready" if prev_signal != "sell ready" => {
-            eprintln!("[real cycle] notify SELL READY (transition from '{}')", prev_signal);
+            crate::live_log!("[realcycle] notify SELL READY (transition from '{}')", prev_signal);
             notifier.notify_ready(&session.market, "sell", target_price).await;
         }
         _ => {} // hold / ready / repeated ready — no action

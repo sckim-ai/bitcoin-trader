@@ -4,3 +4,4 @@ pub mod day_psy_store;
 pub mod engine;
 pub mod optimizer;
 pub mod live_signal;
+pub mod file_logger;
