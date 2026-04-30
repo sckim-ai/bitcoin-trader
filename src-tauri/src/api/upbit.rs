@@ -105,6 +105,19 @@ impl UpbitClient {
         format!("{:x}", hasher.finalize())
     }
 
+    /// Build a query string from (key, value) pairs, **sorted by key**.
+    /// Upbit's JWT query_hash requires alphabetic order — body is a JSON
+    /// object (unordered) but the hash they verify against is computed from
+    /// a deterministic, sorted form. Mismatch → 401 invalid_query_payload.
+    fn build_sorted_query(mut pairs: Vec<(&'static str, String)>) -> String {
+        pairs.sort_by_key(|(k, _)| *k);
+        pairs
+            .iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect::<Vec<_>>()
+            .join("&")
+    }
+
     // ─── Market data (no auth) ───
 
     pub async fn get_current_price(
@@ -188,18 +201,23 @@ impl UpbitClient {
         volume: f64,
         price: f64,
     ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-        let query = format!(
-            "market={}&side={}&volume={}&price={}&ord_type=limit",
-            market, side, volume, price
-        );
+        let volume_str = volume.to_string();
+        let price_str = price.to_string();
+        let query = Self::build_sorted_query(vec![
+            ("market", market.to_string()),
+            ("side", side.to_string()),
+            ("volume", volume_str.clone()),
+            ("price", price_str.clone()),
+            ("ord_type", "limit".to_string()),
+        ]);
         let query_hash = Self::hash_query(&query);
         let token = self.generate_token(Some(&query_hash))?;
 
         let body = serde_json::json!({
             "market": market,
             "side": side,
-            "volume": volume.to_string(),
-            "price": price.to_string(),
+            "volume": volume_str,
+            "price": price_str,
             "ord_type": "limit",
         });
 
@@ -259,13 +277,14 @@ impl UpbitClient {
         target_price: f64,
     ) -> Result<OrderResponse, String> {
         let volume_str = format!("{:.8}", volume);
-        // Upbit accepts integer KRW for ETH/BTC pairs; format with no decimals
-        // matches the form the legacy C# client used.
         let price_str = format!("{}", target_price.round() as u64);
-        let query = format!(
-            "market={}&side={}&volume={}&price={}&ord_type=limit",
-            market, side, volume_str, price_str
-        );
+        let query = Self::build_sorted_query(vec![
+            ("market", market.to_string()),
+            ("side", side.to_string()),
+            ("volume", volume_str.clone()),
+            ("price", price_str.clone()),
+            ("ord_type", "limit".to_string()),
+        ]);
         let query_hash = Self::hash_query(&query);
         let token = self
             .generate_token(Some(&query_hash))
@@ -291,10 +310,12 @@ impl UpbitClient {
         // Upbit truncates to integer KRW; pass as integer string to avoid
         // "Decimal precision" rejection.
         let price_str = format!("{}", krw_amount.floor() as u64);
-        let query = format!(
-            "market={}&side=bid&price={}&ord_type=price",
-            market, price_str
-        );
+        let query = Self::build_sorted_query(vec![
+            ("market", market.to_string()),
+            ("side", "bid".to_string()),
+            ("price", price_str.clone()),
+            ("ord_type", "price".to_string()),
+        ]);
         let query_hash = Self::hash_query(&query);
         let token = self
             .generate_token(Some(&query_hash))
@@ -316,12 +337,13 @@ impl UpbitClient {
         market: &str,
         volume: f64,
     ) -> Result<OrderResponse, String> {
-        // Volume kept at 8-decimal precision (Upbit max).
         let volume_str = format!("{:.8}", volume);
-        let query = format!(
-            "market={}&side=ask&volume={}&ord_type=market",
-            market, volume_str
-        );
+        let query = Self::build_sorted_query(vec![
+            ("market", market.to_string()),
+            ("side", "ask".to_string()),
+            ("volume", volume_str.clone()),
+            ("ord_type", "market".to_string()),
+        ]);
         let query_hash = Self::hash_query(&query);
         let token = self
             .generate_token(Some(&query_hash))
