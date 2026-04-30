@@ -25,6 +25,7 @@ import SettingsPage from "./pages/SettingsPage";
 import AdminPage from "./pages/AdminPage";
 import { useAuthStore } from "./stores/authStore";
 import { Button } from "./components/ui/Button";
+import { ConfirmDialogHost } from "./components/ui/ConfirmDialog";
 
 const NAV_ITEMS = [
   { to: "/", icon: Database, label: "Data" },
@@ -146,7 +147,12 @@ function App() {
   useOptimizationEventBridge();
 
   if (!user) {
-    return <LoginForm />;
+    return (
+      <>
+        <LoginForm />
+        <ConfirmDialogHost />
+      </>
+    );
   }
 
   return (
@@ -249,6 +255,7 @@ function App() {
           </Routes>
         </main>
       </div>
+      <ConfirmDialogHost />
     </BrowserRouter>
   );
 }

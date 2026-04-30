@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "../components/ui/Button";
 import { Card, CardContent, CardHeader } from "../components/ui/Card";
+import { Badge } from "../components/ui/Badge";
+import { confirmDialog } from "../components/ui/ConfirmDialog";
 import { Plus, Trash2, AlertOctagon } from "lucide-react";
 import SessionTable from "../components/live/SessionTable";
 import NewSessionDialog from "../components/live/NewSessionDialog";
@@ -45,10 +47,26 @@ export default function LiveTradingPage() {
   );
 
   const handleKillSwitch = async () => {
-    if (!window.confirm(
-      `실거래 세션 ${runningRealCount}개를 즉시 정지합니다. 계속하시겠습니까?\n\n` +
-      `(주의: 미체결 주문은 별도로 취소되지 않습니다 — Phase 4A.5에서 추가 예정)`
-    )) return;
+    const ok = await confirmDialog({
+      title: "Kill switch — 실거래 세션 즉시 정지",
+      severity: "danger",
+      confirmLabel: "정지",
+      body: (
+        <div className="space-y-2">
+          <p>
+            실행 중인{" "}
+            <span className="text-rose-400 font-data font-semibold">
+              real 세션 {runningRealCount}개
+            </span>
+            를 즉시 정지합니다.
+          </p>
+          <p className="text-xs text-zinc-500">
+            ⚠ 미체결 주문은 별도로 취소되지 않습니다 (Phase 4A.5 예정).
+          </p>
+        </div>
+      ),
+    });
+    if (!ok) return;
     setKillBusy(true);
     try {
       const ids = await emergencyStopAllReal();
@@ -65,7 +83,18 @@ export default function LiveTradingPage() {
   };
 
   const handleDemote = async (id: number) => {
-    if (!window.confirm("이 세션을 paper 모드로 되돌립니다. 계속하시겠습니까?")) return;
+    const ok = await confirmDialog({
+      title: "Paper 모드로 되돌리기",
+      severity: "warning",
+      confirmLabel: "되돌리기",
+      body: (
+        <p>
+          세션 <Badge variant="amber">#{id}</Badge> 을(를) paper 모드로 되돌립니다.
+          이후 자동매매는 모의 주문으로만 실행됩니다.
+        </p>
+      ),
+    });
+    if (!ok) return;
     try {
       await toggleSessionMode(id, "paper");
     } catch (e) {
@@ -274,10 +303,22 @@ export default function LiveTradingPage() {
                       <Button
                         size="sm"
                         variant="danger"
-                        onClick={() => {
-                          if (window.confirm(`Delete preset "${p.name}"?`)) {
-                            deletePreset(p.id);
-                          }
+                        onClick={async () => {
+                          const ok = await confirmDialog({
+                            title: "Preset 삭제",
+                            severity: "warning",
+                            confirmLabel: "삭제",
+                            body: (
+                              <p>
+                                Preset{" "}
+                                <span className="text-amber-400 font-data font-semibold">
+                                  "{p.name}"
+                                </span>{" "}
+                                을(를) 삭제합니다.
+                              </p>
+                            ),
+                          });
+                          if (ok) deletePreset(p.id);
                         }}
                       >
                         <Trash2 size={12} />
@@ -337,10 +378,23 @@ export default function LiveTradingPage() {
             ticks={ticks}
             onStart={startSession}
             onStop={stopSession}
-            onDelete={(id) => {
-              if (window.confirm("Delete this session? All trades and equity history will be removed.")) {
-                deleteSession(id);
-              }
+            onDelete={async (id) => {
+              const ok = await confirmDialog({
+                title: "세션 삭제",
+                severity: "danger",
+                confirmLabel: "삭제",
+                body: (
+                  <div className="space-y-2">
+                    <p>
+                      세션 <Badge variant="amber">#{id}</Badge> 을(를) 삭제합니다.
+                    </p>
+                    <p className="text-xs text-zinc-500">
+                      해당 세션의 모든 trade 와 equity 기록이 영구 삭제되며, 되돌릴 수 없습니다.
+                    </p>
+                  </div>
+                ),
+              });
+              if (ok) deleteSession(id);
             }}
             onPromoteRequest={(s) => setPromoteTarget(s)}
             onDemote={handleDemote}

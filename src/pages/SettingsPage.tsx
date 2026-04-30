@@ -10,6 +10,7 @@ import {
   Trash2,
   Wifi,
 } from "lucide-react";
+import { confirmDialog } from "../components/ui/ConfirmDialog";
 import {
   saveNotificationConfig,
   testNotification,
@@ -95,7 +96,20 @@ export default function SettingsPage() {
   };
 
   const handleClearKeys = async () => {
-    if (!window.confirm("Remove the saved Upbit API keys from the OS keychain?")) return;
+    const ok = await confirmDialog({
+      title: "Upbit API 키 삭제",
+      severity: "warning",
+      confirmLabel: "삭제",
+      body: (
+        <div className="space-y-2">
+          <p>OS 키체인에 저장된 Upbit API 키를 삭제합니다.</p>
+          <p className="text-xs text-zinc-500">
+            다시 입력하기 전까지 라이브 트레이딩과 잔고 조회가 중단됩니다.
+          </p>
+        </div>
+      ),
+    });
+    if (!ok) return;
     setKeyBusy(true);
     try {
       await clearUpbitKeys();

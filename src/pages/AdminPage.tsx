@@ -7,6 +7,7 @@ import { Select } from "../components/ui/Select";
 import { Button } from "../components/ui/Button";
 import { Badge } from "../components/ui/Badge";
 import { Trash2 } from "lucide-react";
+import { confirmDialog } from "../components/ui/ConfirmDialog";
 
 export default function AdminPage() {
   const { token, isAdmin } = useAuthStore();
@@ -55,7 +56,18 @@ export default function AdminPage() {
 
   const handleDelete = async (userId: number, username: string) => {
     if (!token) return;
-    if (!confirm(`Delete user "${username}"?`)) return;
+    const ok = await confirmDialog({
+      title: "사용자 삭제",
+      severity: "danger",
+      confirmLabel: "삭제",
+      body: (
+        <p>
+          사용자 <span className="text-amber-400 font-data font-semibold">"{username}"</span> 을(를)
+          삭제합니다. 이 작업은 되돌릴 수 없습니다.
+        </p>
+      ),
+    });
+    if (!ok) return;
     try {
       await deleteUser(token, userId);
       await fetchUsers();
