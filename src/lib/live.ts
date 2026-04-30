@@ -44,6 +44,22 @@ export const toggleSessionMode = (id: number, mode: "paper" | "real"): Promise<v
 /// Mode stays 'real' — only status flips to 'stopped'.
 export const emergencyStopAllReal = (): Promise<number[]> =>
   invoke("emergency_stop_all_real");
+
+export interface PendingOrderRow {
+  uuid: string;
+  session_id: number;
+  side: "bid" | "ask";
+  market: string;
+  ord_type: string;
+  target_price: number | null;
+  requested: number;
+  placed_at: string;
+  last_checked: string | null;
+}
+
+/// Wait-state pending orders across all sessions. Empty in steady state.
+export const listPendingOrders = (): Promise<PendingOrderRow[]> =>
+  invoke("list_pending_orders");
 export const listSessionTrades = (sessionId: number): Promise<LiveTrade[]> =>
   invoke("list_session_trades", { sessionId });
 /// Persisted per-candle signal_log for the session — written by session_engine

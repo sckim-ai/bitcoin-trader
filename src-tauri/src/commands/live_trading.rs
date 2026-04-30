@@ -282,6 +282,39 @@ pub fn toggle_session_mode(
     Ok(())
 }
 
+/// All wait-state pending orders across sessions. Used by the LiveTrading
+/// page's "pending" widget — normally 0 rows during steady operation, but
+/// useful for spotting stuck orders during outages or re-peg failures.
+#[derive(serde::Serialize)]
+pub struct PendingOrderRow {
+    pub uuid: String,
+    pub session_id: i64,
+    pub side: String,
+    pub market: String,
+    pub ord_type: String,
+    pub target_price: Option<f64>,
+    pub requested: f64,
+    pub placed_at: String,
+    pub last_checked: Option<String>,
+}
+
+#[tauri::command]
+pub fn list_pending_orders(state: State<'_, AppState>) -> Result<Vec<PendingOrderRow>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let rows = live_repo::list_pending_wait(&conn).map_err(|e| e.to_string())?;
+    Ok(rows.into_iter().map(|p| PendingOrderRow {
+        uuid: p.uuid,
+        session_id: p.session_id,
+        side: p.side,
+        market: p.market,
+        ord_type: p.ord_type,
+        target_price: p.target_price,
+        requested: p.requested,
+        placed_at: p.placed_at,
+        last_checked: p.last_checked,
+    }).collect())
+}
+
 /// Stop every running real session immediately. Returns the affected ids.
 /// Mode is preserved (still 'real') — the user explicitly chose those, and
 /// silent demote on emergency would be surprising. To revert mode, use

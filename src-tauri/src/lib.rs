@@ -155,6 +155,7 @@ mod app {
                 live_trading::refresh_session_cycle,
                 live_trading::toggle_session_mode,
                 live_trading::emergency_stop_all_real,
+                live_trading::list_pending_orders,
                 upbit_keys::save_upbit_keys,
                 upbit_keys::get_upbit_key_status,
                 upbit_keys::clear_upbit_keys,

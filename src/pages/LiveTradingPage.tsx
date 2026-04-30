@@ -5,6 +5,7 @@ import { Plus, Trash2, AlertOctagon } from "lucide-react";
 import SessionTable from "../components/live/SessionTable";
 import NewSessionDialog from "../components/live/NewSessionDialog";
 import PromoteRealDialog from "../components/live/PromoteRealDialog";
+import PendingOrdersWidget from "../components/live/PendingOrdersWidget";
 import LiveKpiBar from "../components/live/LiveKpiBar";
 import CandleChart from "../components/live/CandleChart";
 import { colorFor } from "../components/live/charts/sessionPalette";
@@ -288,6 +289,8 @@ export default function LiveTradingPage() {
           )}
         </CardContent>
       </Card>
+
+      <PendingOrdersWidget />
 
       <Card>
         <CardHeader className="flex items-center justify-between">
