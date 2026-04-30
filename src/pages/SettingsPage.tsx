@@ -14,6 +14,7 @@ import { confirmDialog } from "../components/ui/ConfirmDialog";
 import {
   saveNotificationConfig,
   testNotification,
+  testTradeNotifications,
   saveUpbitKeys,
   getUpbitKeyStatus,
   clearUpbitKeys,
@@ -157,6 +158,18 @@ export default function SettingsPage() {
       const msg = e instanceof Error ? e.message : String(e);
       setNotifStatus((s) => ({ ...s, [`${channel}_test`]: `✗ ${msg}` }));
       // 에러는 사용자가 복사해 디버깅할 수 있도록 자동 사라지지 않게
+    }
+  };
+
+  const handleTestTrades = async () => {
+    try {
+      setNotifStatus((s) => ({ ...s, trade_test: "⏳ 6개 메시지 전송 중..." }));
+      const result = await testTradeNotifications();
+      setNotifStatus((s) => ({ ...s, trade_test: `✓ ${result}` }));
+      setTimeout(() => setNotifStatus((s) => ({ ...s, trade_test: "" })), 8000);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setNotifStatus((s) => ({ ...s, trade_test: `✗ ${msg}` }));
     }
   };
 
@@ -314,6 +327,30 @@ export default function SettingsPage() {
             <Input type="password" passwordToggle value={telegramBotToken} onChange={(e) => setTelegramBotToken(e.target.value)} placeholder="Bot Token" />
             <Input value={telegramChatId} onChange={(e) => setTelegramChatId(e.target.value)} placeholder="Chat ID" />
           </NotifSection>
+
+          {/* Trade-notification format check — 6개 변형을 enabled 채널에 모두 전송 */}
+          <div className="pt-4 border-t border-zinc-800">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div>
+                <h3 className="text-xs font-semibold text-zinc-300">Trade notifications 포맷 검증</h3>
+                <p className="text-[11px] text-zinc-500 mt-0.5">
+                  매수대기·매도대기·매수·매도·주문등록·늦은체결 6종을 enabled 채널로 전송 (~5초)
+                </p>
+              </div>
+              <Button onClick={handleTestTrades} size="sm" variant="secondary">
+                <Send size={12} /> Send 6 samples
+              </Button>
+            </div>
+            {notifStatus.trade_test && (
+              <p className={`text-xs mt-2 break-all ${
+                notifStatus.trade_test.startsWith("✓") ? "text-emerald-400"
+                : notifStatus.trade_test.startsWith("✗") ? "text-rose-400"
+                : "text-sky-400"
+              }`}>
+                {notifStatus.trade_test}
+              </p>
+            )}
+          </div>
         </CardContent>
       </Card>
 

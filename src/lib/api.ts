@@ -293,6 +293,15 @@ export async function testNotification(channel: string): Promise<string> {
   throw new Error("Notification test via PWA not yet implemented");
 }
 
+/// Send the 6 trade-notification variants (buy_ready / sell_ready /
+/// buy / sell / order_registered / late_fill) so the user can verify
+/// formatting in their channel. Goes through the regular runtime path
+/// (enabled=0 channels are skipped).
+export async function testTradeNotifications(): Promise<string> {
+  if (isTauri) return tauriInvoke("test_trade_notifications");
+  throw new Error("Trade-notification test is desktop-only");
+}
+
 // --- Upbit Keys (OS keychain via Tauri) ---
 
 export interface UpbitKeyStatus {

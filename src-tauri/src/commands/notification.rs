@@ -31,6 +31,69 @@ pub fn save_notification_config(
     Ok(())
 }
 
+/// Send the 5 trade-notification variants in sequence so the user can verify
+/// each format renders correctly in their channel (Discord/Telegram/FCM).
+/// Goes through the regular NotificationManager (so enabled=0 channels are
+/// skipped — explicit "this is the runtime path" test, not the credential
+/// validation that `test_notification` does).
+///
+/// Variants emitted:
+///   1. 매수 대기      (notify_ready buy)
+///   2. 매도 대기      (notify_ready sell)
+///   3. 매수 즉시 체결 (notify_trade_full buy, late=false)
+///   4. 매도 즉시 체결 (notify_trade_full sell, late=false, +1.71% pnl)
+///   5. 매수 주문 등록 (notify_order_registered buy, limit wait)
+///   6. 매수 늦은 체결 (notify_trade_full buy, late=true)
+#[tauri::command]
+pub async fn test_trade_notifications(state: State<'_, AppState>) -> Result<String, String> {
+    let mgr = {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        crate::notifications::manager::NotificationManager::from_db(&conn, DEFAULT_USER_ID)
+    };
+
+    let market = "KRW-ETH";
+    let session = Some("Long_V3.1_1288% (TEST)");
+    let price = 3_400_000.0;
+    let qty = 0.00294118;
+
+    // 1) buy ready
+    mgr.notify_ready(market, "buy", price, session).await;
+    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+
+    // 2) sell ready
+    mgr.notify_ready(market, "sell", price + 50_000.0, session).await;
+    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+
+    // 3) buy executed (immediate)
+    mgr.notify_trade_full(
+        "buy", market, price, qty, None,
+        Some("TEST · 1 chunks done / 0 wait"),
+        false,
+    ).await;
+    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+
+    // 4) sell executed (immediate, with profit)
+    mgr.notify_trade_full(
+        "sell", market, price + 58_140.0, qty, Some(1.71),
+        Some("TEST · 1 chunks done / 0 wait"),
+        false,
+    ).await;
+    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+
+    // 5) limit-buy registered, not yet filled
+    mgr.notify_order_registered(market, "buy", price - 20_000.0, session).await;
+    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+
+    // 6) late fill (tracker found a wait order completed across cycles)
+    mgr.notify_trade_full(
+        "buy", market, price, qty, None,
+        Some("TEST · late fill, Long_V3.1 (placed 2026-04-30T10:00:00Z)"),
+        true,
+    ).await;
+
+    Ok("6개 메시지 전송 완료 — Discord/Telegram/FCM 채널을 확인하세요.".to_string())
+}
+
 /// Test a notification channel — independent of `enabled` flag. The intent
 /// is "does this URL/token actually work?", which is the question users
 /// have right after entering credentials. The legacy implementation went

@@ -460,10 +460,8 @@ async fn real_reconcile_step<'a>(
                         "buy", &session.market, target_price, done_executed, None, Some(&note),
                     ).await;
                 } else if !wait_orders.is_empty() {
-                    notifier.notify_signal(
-                        &session.market,
-                        &format!("매수 주문 등록 (close {:.0}원, wait)", target_price),
-                        &session.label,
+                    notifier.notify_order_registered(
+                        &session.market, "buy", target_price, Some(&session.label),
                     ).await;
                 }
             }
@@ -537,10 +535,8 @@ async fn real_reconcile_step<'a>(
                         Some(pnl_pct), Some(&note),
                     ).await;
                 } else if !wait_orders.is_empty() {
-                    notifier.notify_signal(
-                        &session.market,
-                        &format!("매도 주문 등록 (close {:.0}원, wait)", target_price),
-                        &session.label,
+                    notifier.notify_order_registered(
+                        &session.market, "sell", target_price, Some(&session.label),
                     ).await;
                 }
             }
@@ -558,11 +554,11 @@ async fn real_reconcile_step<'a>(
         // LiveTradingService.cs:1726-1756.
         "buy ready" if prev_signal != "buy ready" => {
             crate::live_log!("[realcycle] notify BUY READY (transition from '{}')", prev_signal);
-            notifier.notify_ready(&session.market, "buy", target_price).await;
+            notifier.notify_ready(&session.market, "buy", target_price, Some(&session.label)).await;
         }
         "sell ready" if prev_signal != "sell ready" => {
             crate::live_log!("[realcycle] notify SELL READY (transition from '{}')", prev_signal);
-            notifier.notify_ready(&session.market, "sell", target_price).await;
+            notifier.notify_ready(&session.market, "sell", target_price, Some(&session.label)).await;
         }
         _ => {} // hold / ready / repeated ready — no action
     }

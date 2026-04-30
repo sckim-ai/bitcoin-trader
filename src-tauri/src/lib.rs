@@ -143,6 +143,7 @@ mod app {
                 migration::migrate_from_csv,
                 notification::save_notification_config,
                 notification::test_notification,
+                notification::test_trade_notifications,
                 live_trading::save_preset,
                 live_trading::list_presets,
                 live_trading::delete_preset,

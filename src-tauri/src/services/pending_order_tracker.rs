@@ -142,8 +142,8 @@ pub async fn reconcile_pending_orders(
                         .unwrap_or_else(|| format!("session {}", p.session_id));
                     if p.side == "bid" {
                         let note = format!("late fill, {} (placed {})", label, p.placed_at);
-                        notifier.notify_trade_rich(
-                            "buy", &p.market, price, executed, None, Some(&note),
+                        notifier.notify_trade_full(
+                            "buy", &p.market, price, executed, None, Some(&note), true,
                         ).await;
                     } else if p.side == "ask" {
                         let buy_price = session_for_notif.as_ref()
@@ -152,8 +152,8 @@ pub async fn reconcile_pending_orders(
                             (price - buy_price) / buy_price * 100.0
                         } else { 0.0 };
                         let note = format!("late fill, {} (placed {})", label, p.placed_at);
-                        notifier.notify_trade_rich(
-                            "sell", &p.market, price, executed, Some(pnl_pct), Some(&note),
+                        notifier.notify_trade_full(
+                            "sell", &p.market, price, executed, Some(pnl_pct), Some(&note), true,
                         ).await;
                     }
                 }

@@ -106,20 +106,54 @@ impl NotificationManager {
 
     /// "매수 대기" / "매도 대기" 알림. 신호 발생 직후 한 번만 보내도록
     /// caller가 상태 비교 후 호출해야 함 (중복 방지는 호출자 책임).
-    pub async fn notify_ready(&self, market: &str, side: &str, target_price: f64) {
-        let label = match side {
-            "buy" => "매수 대기",
-            "sell" => "매도 대기",
+    /// session_label은 다중 세션 운용 환경에서 어떤 세션의 신호인지 식별.
+    pub async fn notify_ready(
+        &self,
+        market: &str,
+        side: &str,
+        target_price: f64,
+        session_label: Option<&str>,
+    ) {
+        let (icon, label) = match side {
+            "buy" => ("🔵", "매수 대기"),
+            "sell" => ("🟠", "매도 대기"),
             _ => return,
         };
+        let session_part = match session_label {
+            Some(s) if !s.is_empty() => format!("\n  ↳ session: {}", s),
+            _ => String::new(),
+        };
         self.send_all(&format!(
-            "📊 {} {} (close ≈ {:.0}원)",
-            market, label, target_price
+            "{} {} {} (close ≈ {:.0}원){}",
+            icon, market, label, target_price, session_part,
         )).await;
     }
 
-    /// 매수/매도 후 추가 컨텍스트(전략, 봉 close 등)를 포함한 풍부한 알림.
-    /// `note`가 있으면 메시지에 추가. P/L은 sell일 때만 의미 있음.
+    /// Limit 주문이 호가창에 등록만 되고 미체결 상태일 때. 매수/매도 분리.
+    pub async fn notify_order_registered(
+        &self,
+        market: &str,
+        side: &str,
+        target_price: f64,
+        session_label: Option<&str>,
+    ) {
+        let (icon, label) = match side {
+            "buy" => ("📥", "매수 주문 등록"),
+            "sell" => ("📤", "매도 주문 등록"),
+            _ => return,
+        };
+        let session_part = match session_label {
+            Some(s) if !s.is_empty() => format!("\n  ↳ session: {}", s),
+            _ => String::new(),
+        };
+        self.send_all(&format!(
+            "{} {} {} (지정가 {:.0}원, wait){}",
+            icon, market, label, target_price, session_part,
+        )).await;
+    }
+
+    /// 매수/매도 후 즉시 체결(or 추정 booking) 알림. P/L은 sell만 의미.
+    /// `late=true`면 동기 cycle이 아닌 tracker가 늦게 잡은 fill — 다른 emoji.
     pub async fn notify_trade_rich(
         &self,
         side: &str,
@@ -129,18 +163,47 @@ impl NotificationManager {
         pnl_pct: Option<f64>,
         note: Option<&str>,
     ) {
+        self.notify_trade_full(side, market, price, volume, pnl_pct, note, false).await;
+    }
+
+    /// notify_trade_rich와 같지만 late=true면 ⏱ 아이콘으로 시각 구분.
+    pub async fn notify_trade_full(
+        &self,
+        side: &str,
+        market: &str,
+        price: f64,
+        volume: f64,
+        pnl_pct: Option<f64>,
+        note: Option<&str>,
+        late: bool,
+    ) {
+        let icon = match (side, late) {
+            ("buy", false)  => "🟢",
+            ("buy", true)   => "⏱🟢",
+            ("sell", false) => "🔴",
+            ("sell", true)  => "⏱🔴",
+            _ => return,
+        };
         let head = match side {
-            "buy" => format!("🟢 {} 매수: {:.0}원 × {:.8}", market, price, volume),
+            "buy" => format!("{} {} 매수: {:.0}원 × {:.8}", icon, market, price, volume),
             "sell" => format!(
-                "🔴 {} 매도: {:.0}원 × {:.8} (P/L: {:+.2}%)",
-                market, price, volume, pnl_pct.unwrap_or(0.0)
+                "{} {} 매도: {:.0}원 × {:.8} (P/L: {:+.2}%)",
+                icon, market, price, volume, pnl_pct.unwrap_or(0.0),
             ),
             _ => return,
         };
-        let msg = match note {
-            Some(n) if !n.is_empty() => format!("{}\n  ↳ {}", head, n),
-            _ => head,
-        };
+        // KST 자동 변환 — Discord 자체 타임스탬프와 별개로, 메시지 본문에도
+        // 명시되어 있으면 사후 분석 시 “이 메시지가 언제의 cycle인지” 즉시 인지.
+        let kst = (chrono::Utc::now() + chrono::Duration::hours(9))
+            .format("%Y-%m-%d %H:%M:%S KST")
+            .to_string();
+        let mut msg = head;
+        msg.push_str(&format!("\n  ⏰ {}", kst));
+        if let Some(n) = note {
+            if !n.is_empty() {
+                msg.push_str(&format!("\n  ↳ {}", n));
+            }
+        }
         self.send_all(&msg).await;
     }
 
