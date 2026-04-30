@@ -31,22 +31,71 @@ pub fn save_notification_config(
     Ok(())
 }
 
+/// Test a notification channel — independent of `enabled` flag. The intent
+/// is "does this URL/token actually work?", which is the question users
+/// have right after entering credentials. The legacy implementation went
+/// through NotificationManager.from_db which silently skipped channels
+/// where enabled=0, leaving "Save → Test" silent failures.
 #[tauri::command]
 pub async fn test_notification(
     channel: String,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
-    let mgr = {
+    use crate::notifications::{discord::DiscordClient, fcm::FcmClient, telegram::TelegramClient};
+
+    // Pull the raw config row, ignoring `enabled`.
+    let config_json = {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
-        crate::notifications::manager::NotificationManager::from_db(&conn, DEFAULT_USER_ID)
-    }; // conn dropped here, before any await
+        let row: Option<String> = conn
+            .query_row(
+                "SELECT config FROM notification_configs WHERE user_id = ?1 AND channel = ?2",
+                rusqlite::params![DEFAULT_USER_ID, channel],
+                |r| r.get(0),
+            )
+            .ok();
+        row
+    };
+    let config_json = config_json.ok_or_else(|| {
+        format!("No saved config for channel '{}'. Save it first.", channel)
+    })?;
+    let config: serde_json::Value = serde_json::from_str(&config_json)
+        .map_err(|e| format!("Stored config is malformed: {e}"))?;
 
     let test_msg = "BTC Trader 테스트 알림입니다.";
 
     match channel.as_str() {
-        "fcm" | "discord" | "telegram" | "all" => {
-            mgr.notify_alert(test_msg).await;
-            Ok(format!("테스트 알림 전송 완료 ({})", channel))
+        "discord" => {
+            let url = config["webhook_url"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .ok_or("Discord webhook_url is empty")?;
+            DiscordClient::new(url.to_string())
+                .send(test_msg)
+                .await
+                .map_err(|e| format!("Discord send failed: {e}"))?;
+            Ok("Discord 전송 완료 — 채널을 확인하세요.".to_string())
+        }
+        "telegram" => {
+            let token = config["bot_token"].as_str().filter(|s| !s.is_empty())
+                .ok_or("Telegram bot_token is empty")?;
+            let chat_id = config["chat_id"].as_str().filter(|s| !s.is_empty())
+                .ok_or("Telegram chat_id is empty")?;
+            TelegramClient::new(token.to_string(), chat_id.to_string())
+                .send(test_msg)
+                .await
+                .map_err(|e| format!("Telegram send failed: {e}"))?;
+            Ok("Telegram 전송 완료 — 채팅을 확인하세요.".to_string())
+        }
+        "fcm" => {
+            let key = config["server_key"].as_str().filter(|s| !s.is_empty())
+                .ok_or("FCM server_key is empty")?;
+            let token = config["device_token"].as_str().filter(|s| !s.is_empty())
+                .ok_or("FCM device_token is empty")?;
+            FcmClient::new(key.to_string())
+                .send(token, "BTC Trader", test_msg, "high")
+                .await
+                .map_err(|e| format!("FCM send failed: {e}"))?;
+            Ok("FCM 전송 완료 — 디바이스를 확인하세요.".to_string())
         }
         _ => Err(format!("Unknown channel: {channel}")),
     }

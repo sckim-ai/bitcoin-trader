@@ -123,8 +123,9 @@ export default function SettingsPage() {
         enabled = telegramEnabled;
       }
       await saveNotificationConfig(channel, config, enabled);
-      setNotifStatus((s) => ({ ...s, [channel]: "Saved!" }));
-      setTimeout(() => setNotifStatus((s) => ({ ...s, [channel]: "" })), 2000);
+      const note = enabled ? "Saved!" : "Saved (disabled — 알림 안 감)";
+      setNotifStatus((s) => ({ ...s, [channel]: note }));
+      setTimeout(() => setNotifStatus((s) => ({ ...s, [channel]: "" })), 3000);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       setNotifStatus((s) => ({ ...s, [channel]: `Error: ${msg}` }));
@@ -133,13 +134,15 @@ export default function SettingsPage() {
 
   const handleTestNotif = async (channel: string) => {
     try {
-      setNotifStatus((s) => ({ ...s, [`${channel}_test`]: "Sending..." }));
-      await testNotification(channel);
-      setNotifStatus((s) => ({ ...s, [`${channel}_test`]: "Sent!" }));
-      setTimeout(() => setNotifStatus((s) => ({ ...s, [`${channel}_test`]: "" })), 2000);
+      setNotifStatus((s) => ({ ...s, [`${channel}_test`]: "⏳ Sending..." }));
+      const result = await testNotification(channel);
+      // backend가 채널별 구체 결과 문자열 반환 (e.g. "Discord 전송 완료 — 채널을 확인하세요.")
+      setNotifStatus((s) => ({ ...s, [`${channel}_test`]: `✓ ${result}` }));
+      setTimeout(() => setNotifStatus((s) => ({ ...s, [`${channel}_test`]: "" })), 5000);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      setNotifStatus((s) => ({ ...s, [`${channel}_test`]: `Error: ${msg}` }));
+      setNotifStatus((s) => ({ ...s, [`${channel}_test`]: `✗ ${msg}` }));
+      // 에러는 사용자가 복사해 디버깅할 수 있도록 자동 사라지지 않게
     }
   };
 
@@ -362,15 +365,29 @@ function NotifSection({
       <div className="space-y-2">
         {children}
       </div>
-      <div className="flex gap-2 items-center">
+      <div className="flex flex-wrap gap-2 items-center">
         <Button onClick={onSave} size="sm" variant="secondary">
           <Save size={12} /> Save
         </Button>
         <Button onClick={onTest} size="sm" variant="ghost">
           <Send size={12} /> Test
         </Button>
-        {status && <span className="text-xs text-emerald-400">{status}</span>}
-        {testStatus && <span className="text-xs text-sky-400">{testStatus}</span>}
+        {status && (
+          <span className={`text-xs ${status.includes("disabled") ? "text-amber-400" : "text-emerald-400"}`}>
+            {status}
+          </span>
+        )}
+        {testStatus && (
+          <span
+            className={`text-xs break-all ${
+              testStatus.startsWith("✓") ? "text-emerald-400"
+              : testStatus.startsWith("✗") ? "text-rose-400"
+              : "text-sky-400"
+            }`}
+          >
+            {testStatus}
+          </span>
+        )}
       </div>
     </div>
   );
