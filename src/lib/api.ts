@@ -326,6 +326,32 @@ export async function testUpbitConnection(): Promise<number> {
   throw new Error("Upbit key management is desktop-only");
 }
 
+// --- Manual market order (post-4A user trigger) ---
+
+export interface ManualOrderArgs {
+  market: string;
+  side: "buy" | "sell";
+  /** required for buy (Upbit ord_type="price"). */
+  krw_amount?: number;
+  /** required for sell (Upbit ord_type="market"). */
+  volume?: number;
+  /** Attribute the resulting fill to a session — writes is_real=1 row to live_trades. */
+  session_id?: number;
+}
+
+export interface ManualOrderResult {
+  uuid: string;
+  state: string;
+  executed_volume: number;
+  side: string;
+  market: string;
+}
+
+export async function manualMarketOrder(args: ManualOrderArgs): Promise<ManualOrderResult> {
+  if (isTauri) return tauriInvoke("manual_market_order", { args });
+  throw new Error("Manual order is desktop-only");
+}
+
 // --- Trading history (Phase 4C) ---
 
 export interface HistoryFilter {

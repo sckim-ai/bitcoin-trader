@@ -67,6 +67,124 @@ pub async fn manual_sell(market: String, volume: f64, price: f64) -> Result<Stri
     Ok(result.to_string())
 }
 
+// ─── Manual market orders (post-4A, user-triggered) ────────────────────────
+//
+// Distinct from the auto-cycle orders (signal="real_buy"/"real_sell" etc).
+// signal="manual_buy"/"manual_sell" so the history page + CSV can separate
+// "user pressed a button" from "the strategy decided".
+//
+// Booking policy: if `session_id` is provided AND the session is in real
+// mode, attribute the trade to that session (so live_return updates and the
+// position state reconciles next cycle). Otherwise just place the order
+// without DB attribution — useful for one-off testing where the user doesn't
+// want to mix manual fills with a session's track record.
+
+#[derive(serde::Deserialize)]
+pub struct ManualOrderArgs {
+    pub market: String,            // "KRW-ETH" etc.
+    pub side: String,              // "buy" | "sell"
+    pub krw_amount: Option<f64>,   // required for buy (Upbit ord_type="price")
+    pub volume: Option<f64>,       // required for sell (Upbit ord_type="market")
+    pub session_id: Option<i64>,   // None → don't write to live_trades
+}
+
+#[derive(serde::Serialize)]
+pub struct ManualOrderResult {
+    pub uuid: String,
+    pub state: String,
+    pub executed_volume: f64,
+    pub side: String,
+    pub market: String,
+}
+
+#[tauri::command]
+pub async fn manual_market_order(
+    args: ManualOrderArgs,
+    state: State<'_, AppState>,
+) -> Result<ManualOrderResult, String> {
+    let client = create_client()?;
+
+    // Sanity: which side + amount?
+    let order = match args.side.as_str() {
+        "buy" => {
+            let krw = args.krw_amount
+                .ok_or("krw_amount required for buy")?;
+            if krw < 5_000.0 {
+                return Err(format!("Upbit minimum 5,000 KRW (got {:.0})", krw));
+            }
+            client.place_market_buy(&args.market, krw).await?
+        }
+        "sell" => {
+            let vol = args.volume.ok_or("volume required for sell")?;
+            if vol <= 0.0 {
+                return Err("volume must be > 0".into());
+            }
+            client.place_market_sell(&args.market, vol).await?
+        }
+        other => return Err(format!("invalid side: {other}")),
+    };
+
+    // Optionally write to live_trades so the History page picks it up.
+    if let Some(sid) = args.session_id {
+        // We need a price reference for the booked row. Market buys often
+        // return wait/done with executed_volume = 0 in the immediate
+        // response; pull current ticker as a best-effort fill price.
+        let current_price = client.get_current_price(&args.market).await
+            .unwrap_or(0.0);
+        let executed = order.executed_volume_f64();
+        let fee_rate = 0.0005;
+        let now_ts = chrono::Utc::now().to_rfc3339();
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+
+        let booked_volume = if executed > 0.0 {
+            executed
+        } else if args.side == "buy" {
+            // Estimate from KRW / price.
+            args.krw_amount.unwrap_or(0.0) / current_price.max(1.0) * (1.0 - fee_rate)
+        } else {
+            args.volume.unwrap_or(0.0)
+        };
+
+        if booked_volume > 0.0 && current_price > 0.0 {
+            // For sell, compute pnl against the session's stored buy_price
+            // (best effort — manual orders bypass the session's strategy
+            // so the attribution may not be perfect).
+            let (pnl, pnl_pct) = if args.side == "sell" {
+                let buy_price: f64 = conn.query_row(
+                    "SELECT COALESCE(current_buy_price, 0) FROM live_sessions WHERE id = ?1",
+                    [sid],
+                    |r| r.get(0),
+                ).unwrap_or(0.0);
+                if buy_price > 0.0 {
+                    let pnl = (current_price - buy_price) * booked_volume;
+                    let pnl_pct = (current_price - buy_price) / buy_price * 100.0;
+                    (Some(pnl), Some(pnl_pct))
+                } else {
+                    (None, None)
+                }
+            } else {
+                (None, None)
+            };
+
+            let signal_name = if args.side == "buy" { "manual_buy" } else { "manual_sell" };
+            crate::db::live_repo::insert_trade(
+                &conn, sid, &now_ts, &args.side,
+                current_price, booked_volume,
+                current_price * booked_volume * fee_rate,
+                signal_name, pnl, pnl_pct, true, // is_real=1
+            ).map_err(|e| format!("DB insert failed: {e}"))?;
+        }
+    }
+
+    Ok(ManualOrderResult {
+        uuid: order.uuid.clone(),
+        state: order.state.clone(),
+        executed_volume: order.executed_volume_f64(),
+        side: args.side,
+        market: args.market,
+    })
+}
+
 #[tauri::command]
 pub fn get_position(market: String, state: State<'_, AppState>) -> Result<PositionInfo, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;

@@ -6,6 +6,7 @@ import SessionTable from "../components/live/SessionTable";
 import NewSessionDialog from "../components/live/NewSessionDialog";
 import PromoteRealDialog from "../components/live/PromoteRealDialog";
 import PendingOrdersWidget from "../components/live/PendingOrdersWidget";
+import ManualOrderCard from "../components/live/ManualOrderCard";
 import LiveKpiBar from "../components/live/LiveKpiBar";
 import CandleChart from "../components/live/CandleChart";
 import { colorFor } from "../components/live/charts/sessionPalette";
@@ -291,6 +292,14 @@ export default function LiveTradingPage() {
       </Card>
 
       <PendingOrdersWidget />
+
+      <ManualOrderCard
+        sessions={sessions}
+        onPlaced={() => {
+          // 주문 성공 후 sessions/trades 갱신 — 페이지가 즉시 반영
+          loadAllSessionTrades();
+        }}
+      />
 
       <Card>
         <CardHeader className="flex items-center justify-between">

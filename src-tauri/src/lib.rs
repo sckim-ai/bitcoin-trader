@@ -128,6 +128,7 @@ mod app {
                 trading::get_balance,
                 trading::manual_buy,
                 trading::manual_sell,
+                trading::manual_market_order,
                 trading::get_position,
                 trading::start_auto_trading,
                 trading::stop_auto_trading,
