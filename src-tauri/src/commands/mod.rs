@@ -7,3 +7,4 @@ pub mod migration;
 pub mod notification;
 pub mod live_trading;
 pub mod upbit_keys;
+pub mod history;

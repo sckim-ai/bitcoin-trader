@@ -328,6 +328,53 @@ export async function testUpbitConnection(): Promise<number> {
   throw new Error("Upbit key management is desktop-only");
 }
 
+// --- Trading history (Phase 4C) ---
+
+export interface HistoryFilter {
+  session_id?: number;
+  /** RFC3339 or YYYY-MM-DD prefix; inclusive lower bound. */
+  since?: string;
+  /** Exclusive upper bound. */
+  until?: string;
+}
+
+export interface HistoryTrade {
+  id: number;
+  session_id: number;
+  ts: string;
+  side: "buy" | "sell";
+  price: number;
+  volume: number;
+  fee: number;
+  signal: string;
+  pnl: number | null;
+  pnl_pct: number | null;
+  is_real: boolean;
+}
+
+export interface DailyBucket {
+  /** "YYYY-MM-DD" in UTC. */
+  date: string;
+  trade_count: number;
+  realized_pnl: number;
+  avg_pnl_pct: number;
+}
+
+export async function listRealTrades(filter: HistoryFilter): Promise<HistoryTrade[]> {
+  if (isTauri) return tauriInvoke("list_real_trades", { filter });
+  throw new Error("history queries are desktop-only in Phase 4C");
+}
+
+export async function realPnlSummary(filter: HistoryFilter): Promise<DailyBucket[]> {
+  if (isTauri) return tauriInvoke("real_pnl_summary", { filter });
+  throw new Error("history queries are desktop-only in Phase 4C");
+}
+
+export async function exportRealTradesCsv(filter: HistoryFilter): Promise<string> {
+  if (isTauri) return tauriInvoke("export_real_trades_csv", { filter });
+  throw new Error("CSV export is desktop-only in Phase 4C");
+}
+
 // --- Migration API ---
 
 export interface MigrationResult {

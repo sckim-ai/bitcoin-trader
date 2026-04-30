@@ -16,7 +16,7 @@ pub mod commands;
 
 #[cfg(feature = "tauri-app")]
 mod app {
-    use crate::commands::{auth, data, simulation, optimization, trading, migration, notification, live_trading, upbit_keys};
+    use crate::commands::{auth, data, simulation, optimization, trading, migration, notification, live_trading, upbit_keys, history};
     use crate::db::schema;
     use crate::state::AppState;
     use crate::strategies::StrategyRegistry;
@@ -159,6 +159,9 @@ mod app {
                 upbit_keys::get_upbit_key_status,
                 upbit_keys::clear_upbit_keys,
                 upbit_keys::test_upbit_connection,
+                history::list_real_trades,
+                history::real_pnl_summary,
+                history::export_real_trades_csv,
             ])
             .run(tauri::generate_context!())
             .expect("error while running tauri application");
