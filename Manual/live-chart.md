@@ -60,6 +60,14 @@ Live Trading 페이지 상단의 KRW-ETH 캔들차트와 신호 스트립차트�
 ### 신호 스트립이 단일 세션인 이유
 스트립은 봉 단위 단일 색을 칠하는 히스토그램입니다. 여러 세션의 신호를 한 줄에 겹치면 색이 섞여 판독 불가능해집니다. 멀티 세션은 캔들차트 마커로 표현하고, 정밀한 봉별 신호는 **한 세션씩** 비교하는 워크플로를 권장합니다.
 
+### 데이터 갱신 흐름 (single-writer)
+시뮬레이션 사이클 실행은 **hourly scheduler 단일 경로**로만 일어납니다.
+- Scheduler가 매시 정각 cycle 실행 → DB에 trades + signal_log 갱신 → `session:update` 이벤트 emit
+- Frontend는 이벤트를 받으면 read-only로 `getSessionSignalLog` + `loadAllSessionTrades` 만 호출 (cycle 재실행 없음)
+- 마운트 시점이 hour 경계에 맞지 않는 신규 세션은 첫 사이클까지 빈 차트를 보일 수 있음 — 다음 정각에 자동 채워짐
+
+이 단방향 흐름은 이전 `refresh_session_cycle` IPC 명령이 별도 SQLite connection으로 같은 세션의 cycle을 동시 실행하던 race condition을 제거합니다 (live_trades에 paper trade row가 ×2로 쌓이던 증상).
+
 ## 관련 파일
 - [src/pages/LiveTradingPage.tsx](../src/pages/LiveTradingPage.tsx) — 칩 토글바 및 select 로직
 - [src/components/live/CandleChart.tsx](../src/components/live/CandleChart.tsx) — 마커 필터링

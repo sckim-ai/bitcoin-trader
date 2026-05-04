@@ -66,12 +66,6 @@ export const listSessionTrades = (sessionId: number): Promise<LiveTrade[]> =>
 /// each cycle so it always matches the trades in live_trades.
 export const getSessionSignalLog = (sessionId: number): Promise<SignalEvent[]> =>
   invoke("get_session_signal_log", { sessionId });
-/// On-demand cycle: re-runs run_session_cycle now (persists fresh trades +
-/// signal_log + equity) and returns the signal_log. Used on page mount and
-/// when the user picks a session in the strip dropdown so the chart always
-/// reflects current state without waiting for the hourly scheduler.
-export const refreshSessionCycle = (sessionId: number): Promise<SignalEvent[]> =>
-  invoke("refresh_session_cycle", { sessionId });
 
 // ─── Market Ticks ───
 /// Subscribe to market ticks. Returns an unsubscribe function.

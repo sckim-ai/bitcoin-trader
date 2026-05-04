@@ -154,7 +154,6 @@ mod app {
                 live_trading::delete_session,
                 live_trading::list_session_trades,
                 live_trading::get_session_signal_log,
-                live_trading::refresh_session_cycle,
                 live_trading::toggle_session_mode,
                 live_trading::emergency_stop_all_real,
                 live_trading::list_pending_orders,
