@@ -1,7 +1,7 @@
 # Multi Upbit Accounts: 계정별 독립 자동매매
 
 **Date**: 2026-05-15
-**Status**: Design v2 (코드 리뷰 반영 — multi-real 정책 제거, pending tracker 재구조화, async/Mutex 흐름 명시)
+**Status**: Design v3 (2차 리뷰 반영 — keyring migration 순서, paper/real unique 분리, §5.1 보상패턴 동기화, pending tracker per-session, legacy trading 커맨드 정리)
 **Scope**: 여러 Upbit 계정을 등록하고, 계정마다 독립적으로 1개의 자동매매 세션을 운영
 **Trading target**: 현재 ETH 단독 자동매매 구조 유지, 계정 격리만 추가
 
@@ -18,7 +18,7 @@
 | 항목 | 결정 | 근거 |
 |------|------|------|
 | 계정-세션 바인딩 | **1 계정 = 1 running 세션** | 사용자 멘탈 모델 단순, 같은 계정 두 세션이 KRW 잔고 충돌하는 경계 케이스 원천 차단 |
-| 강제 방식 | **DB 부분 유니크 인덱스** (`WHERE status='running' AND upbit_account_id IS NOT NULL`) | NULL은 SQLite에서 서로 다르게 취급되므로 명시적 IS NOT NULL 필요 |
+| 강제 방식 | **DB 부분 유니크 인덱스** (`WHERE status='running' AND mode='real' AND upbit_account_id IS NOT NULL`) | real만 잔고 충돌이 있으므로 real 한정 — paper는 같은 계정에서 N개 공존 허용 |
 | 기존 multi-real=1 정책 | **제거** — `count_real_sessions` 호출 삭제 | 본 설계의 핵심 목표 (멀티 계정 동시 real)와 직접 충돌하는 기존 invariant |
 | 키 저장소 | OS keyring, ID에 `_<account_id>` 접미사 | 자격증명 관리자에서 식별 가능, DELETE 시 정확한 항목 제거 |
 | 계정 관리 UI | **별도 `/accounts` 페이지** | Settings에서 분리 — 계정이 단일 폼이 아닌 컬렉션이 됨 |
@@ -44,11 +44,13 @@ CREATE TABLE upbit_accounts (
 ALTER TABLE live_sessions
     ADD COLUMN upbit_account_id INTEGER REFERENCES upbit_accounts(id) ON DELETE SET NULL;
 
--- A 시나리오 강제: 같은 계정에 running 세션 두 개 불가
--- NULL은 SQLite unique에서 서로 다르게 취급되므로 IS NOT NULL 명시
-CREATE UNIQUE INDEX idx_session_account_running
+-- A 시나리오 강제: 같은 계정에 running **real** 세션 두 개 불가.
+-- paper는 실주문이 없어 잔고 충돌이 없으므로 같은 계정에서 paper N + real 1 공존 허용.
+-- (paper도 1로 제한하면 백테스트 비교를 운영 중 못 돌리게 됨)
+-- NULL은 SQLite unique에서 서로 다르게 취급되므로 IS NOT NULL 명시.
+CREATE UNIQUE INDEX idx_session_account_running_real
     ON live_sessions(upbit_account_id)
-    WHERE status = 'running' AND upbit_account_id IS NOT NULL;
+    WHERE status = 'running' AND mode = 'real' AND upbit_account_id IS NOT NULL;
 ```
 
 **근거**:
@@ -98,25 +100,34 @@ fn migrate_legacy_upbit_key(conn: &Connection) -> Result<()> {
         },
     };
 
-    // 3. accounts 행 생성 (user_id=1 = seeded admin)
+    // 3. 새 네이밍으로 keyring 저장 — 실패 시 즉시 abort
+    //    legacy 삭제는 새 위치 저장이 모두 성공한 뒤에만.
+    keyring::Entry::new("bitcoin-trader", "upbit_access_key_1")
+        .and_then(|e| e.set_password(&access))
+        .map_err(|e| rusqlite::Error::InvalidQuery /* convert */)?;
+    keyring::Entry::new("bitcoin-trader", "upbit_secret_key_1")
+        .and_then(|e| e.set_password(&secret))
+        .map_err(|e| rusqlite::Error::InvalidQuery)?;
+
+    // 4. accounts 행 생성 (user_id=1 = seeded admin)
+    //    keyring 성공이 보장된 뒤에 DB row를 만들어야 "row는 있는데 키 없음" 상태 방지
     conn.execute(
         "INSERT INTO upbit_accounts (id, user_id, label) VALUES (1, 1, '기본')", [])?;
-    // 4. 새 네이밍으로 keyring 저장
-    keyring::Entry::new("bitcoin-trader", "upbit_access_key_1")
-        .and_then(|e| e.set_password(&access)).ok();
-    keyring::Entry::new("bitcoin-trader", "upbit_secret_key_1")
-        .and_then(|e| e.set_password(&secret)).ok();
-    // 5. 옛 keyring 항목 삭제 (env 출처면 no-op)
+
+    // 5. 옛 keyring 항목 삭제 — 새 위치에 모두 저장된 게 확인된 후에만 (env 출처면 no-op)
     let _ = keyring::Entry::new("bitcoin-trader", "upbit_access_key")
         .and_then(|e| e.delete_credential());
     let _ = keyring::Entry::new("bitcoin-trader", "upbit_secret_key")
         .and_then(|e| e.delete_credential());
+
     // 6. 기존 세션을 계정 1에 연결 (paper/real 무관)
     conn.execute(
         "UPDATE live_sessions SET upbit_account_id = 1 WHERE upbit_account_id IS NULL", [])?;
     Ok(())
 }
 ```
+
+**핵심 순서**: 새 위치 keyring write **모두 성공** → DB row 생성 → 옛 keyring 삭제. 어느 한 단계라도 실패하면 다음 단계로 가지 않으므로 "키 유실" 상태가 만들어지지 않는다 — 다음 부팅 시 옛 keyring 항목이 그대로 남아 있어 재시도 가능.
 
 **Idempotency**: account_id=1 존재 확인으로 재부팅 시 무동작. 옛 키도 env도 없으면(클린 설치) 아무 일도 안 일어남 → 사용자가 Accounts 페이지에서 첫 계정 등록.
 
@@ -179,7 +190,7 @@ pub fn upbit_client_or_err(account_id: i64) -> Result<UpbitClient, String>
 | `services/session_engine.rs` | cycle 시작 시 `session.upbit_account_id` → client |
 | `services/auto_trader.rs` | `reconcile_position` 등에 account_id 인자 추가 |
 | `services/pending_order_tracker.rs` | **재구조화 필요** — 자세히는 §4.2.5 |
-| `commands/trading.rs` (수동매매) | **세션 컨텍스트의 account_id 사용** — `LiveLogPanel`에서 수동 매매는 항상 활성 세션에 종속되므로 프론트는 session_id만 전달, 백엔드가 `live_sessions.upbit_account_id` 조회 |
+| `commands/trading.rs` (수동매매) | **세션 컨텍스트의 account_id 사용** — `LiveLogPanel`에서 수동 매매는 항상 활성 세션에 종속되므로 프론트는 session_id만 전달, 백엔드가 `live_sessions.upbit_account_id` 조회 — 자세히는 §4.2.6 |
 | `commands/live_trading.rs` | 세션 생성 시 account_id 검증 (enabled, 키 존재) |
 
 #### 4.2.3 신규 Tauri 커맨드 (`commands/upbit_accounts.rs`)
@@ -239,46 +250,61 @@ if has_running > 0 { return Err("실행 중인 세션이 있습니다. 먼저 �
 
 현재 `reconcile_pending_orders(db, upbit)`는 `list_pending_wait()`로 **모든 세션의 wait 주문**을 받아 단일 `UpbitClient`로 처리한다(`services/pending_order_tracker.rs:44-50`, `db/live_repo.rs:471`). 멀티 계정에서는 A 계정 client로 B 계정 주문 UUID를 `get_order/cancel_order`하게 되어 권한 오류·잘못된 취소가 발생할 수 있다.
 
-**변경안**: tracker가 `pending_orders` → `live_sessions` JOIN으로 `upbit_account_id`를 함께 가져오고, 같은 account_id끼리 그룹핑해서 계정별 client로 처리한다.
+**변경안**: 세션별 cycle은 **자기 계정의 pending만** reconcile한다. 전역 reconcile은 만들지 않는다 — 멀티 세션에서 매 cycle마다 전체 pending을 N번 fetch하면 Upbit rate limit과 중복 `get_order/cancel_order` 호출이 누적된다.
 
 ```rust
-pub async fn reconcile_pending_orders_all(db: &Arc<Mutex<Connection>>) -> Result<usize, BoxErr> {
-    // JOIN 결과: Vec<(PendingOrder, Option<i64> /* account_id */)>
-    let grouped: HashMap<i64, Vec<PendingOrder>> = {
-        let conn = db.lock()?;
-        live_repo::list_pending_wait_with_account(&conn)?
-            .into_iter()
-            .filter_map(|(p, aid)| aid.map(|id| (id, p)))  // NULL account는 skip (legacy)
-            .fold(HashMap::new(), |mut acc, (aid, p)| {
-                acc.entry(aid).or_default().push(p); acc
-            })
+// 새 시그니처: session의 account_id로 범위 한정
+pub async fn reconcile_pending_orders_for_session(
+    db: &Arc<Mutex<Connection>>,
+    session_id: i64,
+    upbit_account_id: i64,
+) -> Result<usize, BoxErr> {
+    let pendings = {
+        let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
+        // 기존 list_pending_wait_by_session(session_id) 재사용 — DB schema에 이미 존재
+        live_repo::list_pending_wait_by_session(&conn, session_id)?
     };
-    let mut resolved = 0;
-    for (account_id, pendings) in grouped {
-        let client = match upbit_client_or_err(account_id) {
-            Ok(c) => c,
-            Err(e) => { live_log!("[pending_tracker] account {account_id} client error: {e}"); continue; }
-        };
-        resolved += reconcile_with_client(db, &client, pendings).await?;
-    }
-    Ok(resolved)
+    if pendings.is_empty() { return Ok(0); }
+
+    let upbit = match crate::commands::upbit_keys::upbit_client_or_err(upbit_account_id) {
+        Ok(c) => c,
+        Err(e) => {
+            crate::live_log!("[pending_tracker] account {upbit_account_id} client error: {e}");
+            return Ok(0);
+        }
+    };
+    reconcile_with_client(db, &upbit, pendings).await
 }
 ```
 
-새 함수 `live_repo::list_pending_wait_with_account`:
-```sql
-SELECT po.uuid, po.session_id, ..., ls.upbit_account_id
-FROM pending_orders po
-LEFT JOIN live_sessions ls ON po.session_id = ls.id
-WHERE po.status = 'wait'
-ORDER BY po.placed_at ASC;
+**호출처 변경** (`services/session_engine.rs:350`):
+```rust
+// 기존: reconcile_pending_orders(db, &upbit).await
+// 변경: reconcile_pending_orders_for_session(db, session.id, session.upbit_account_id?).await
 ```
 
-호출처(`session_engine` 또는 스케줄러)가 cycle 시작마다 `reconcile_pending_orders_all(db)`만 호출 — `upbit` 인자 제거.
+**근거**:
+- 세션은 자기 주문만 책임진다 — 다른 세션의 pending은 다른 세션의 cycle이 처리
+- `list_pending_wait_by_session`은 이미 `live_repo.rs:455` 근방에 존재 (재사용)
+- 전역 `list_pending_wait`은 외부 진단/관리 도구용으로만 유지하거나 제거
+- 같은 계정에 paper N + real 1 세션이 있을 때, 각 cycle은 자기 pending만 보므로 cross-session API 호출 없음
 
-#### 4.2.4 `lib.rs::invoke_handler`
+#### 4.2.6 Legacy single-key 커맨드 정리
 
-신규 커맨드 6개 등록. 기존 `save_upbit_keys`/`clear_upbit_keys`/`test_upbit_connection`은 마이그레이션 안전을 위해 유지하되 deprecated 주석 추가.
+`commands/trading.rs`에는 멀티 세션 이전의 단일 계정 커맨드가 남아 있고 모두 `create_client()`로 단일 키를 쓴다(`trading.rs:18,42-43,52,62,114`):
+
+| 커맨드 | 프론트 사용처 | 처리 |
+|--------|---------------|------|
+| `get_balance` | `stores/tradingStore.ts:60,61` (KRW + BTC) | **유지 + 시그니처 변경** → `get_balance(account_id, currency)`. 호출자가 활성 계정 id 전달 |
+| `manual_buy` / `manual_sell` | `components/trading/ManualOrderDialog.tsx` (구 다이얼로그) | **제거** — `ManualOrderCard` + `manual_market_order(session_id)`가 후속 경로. `ManualOrderDialog`도 함께 제거 또는 카드로 교체 |
+| `get_current_price` | 공용 ticker (인증 불필요) | **유지, account_id 불필요** — public endpoint |
+| `get_position` | `tradingStore.ts:70` | **유지 + 시그니처 변경** → `get_position(account_id, market)` |
+
+`tradingStore`의 글로벌 KRW/BTC 잔고 모델은 멀티 계정과 부조화. 본 작업에서 사용처를 정리하고, `LiveTradingPage` / `AccountsPage` 컴포넌트가 계정별 잔고를 자체 호출하도록 옮긴 뒤 store는 deprecate.
+
+#### 4.2.7 `lib.rs::invoke_handler`
+
+신규 커맨드 6개 등록. 기존 `save_upbit_keys`/`clear_upbit_keys`/`test_upbit_connection`은 마이그레이션 안전을 위해 유지하되 deprecated 주석 추가. `manual_buy`/`manual_sell` 등록 제거.
 
 ### 4.3 프론트엔드 변경점
 
@@ -397,34 +423,44 @@ User: Accounts → [+ 추가] → 라벨/키 입력
   ↓
 Frontend: invoke('add_upbit_account', {...})
   ↓
-Backend:
+Backend (§4.2.3의 보상 패턴 그대로):
   1. 입력 검증
-  2. BEGIN TRANSACTION
-  3. INSERT upbit_accounts → id=2 (예)
-  4. keyring write: upbit_access_key_2, upbit_secret_key_2
-  5. UpbitClient::new(...).get_all_balances()
-  6a. 성공 → COMMIT → 반환
-  6b. 실패 → keyring delete + ROLLBACK → 에러
+  2. DB lock 잡고 INSERT upbit_accounts → 새 id 획득, lock 해제 (await 전에)
+  3. keyring write: upbit_access_key_<id>, upbit_secret_key_<id>  (동기)
+  4. await UpbitClient::new(...).get_all_balances()
+  5a. 성공 → 새 row 반환
+  5b. 실패 → keyring 두 항목 delete + DB lock 다시 잡고 DELETE row → 에러 반환
   ↓
 Frontend: 카드 목록에 추가, 토스트
 ```
 
-### 5.2 세션 시작 시
+**주의**: 진짜 트랜잭션 아님. `std::sync::Mutex<Connection>` 가드는 `.await` 너머로 못 들고 가므로 짧은 동기 작업과 비동기 작업 사이를 보상 삭제로 잇는다.
+
+### 5.2 세션 생성 + 시작 (기존 2-phase 흐름 유지)
+
+현재 백엔드는 `create_session(args) → id` 후 `start_session(id)`로 분리되어 있다(`commands/live_trading.rs:119, 179`). 본 작업은 이 분리를 유지하고 **`CreateSessionArgs`에 `upbit_account_id` 필드만 추가**한다 — 새 combined command를 만들지 않는다.
 
 ```
-User: LiveTrading → [+ 새 세션] → 계정/프리셋 선택
+User: LiveTrading → [+ 새 세션] → 계정/프리셋/라벨 입력
   ↓
-Frontend: invoke('start_live_session', { account_id, preset_id, ... })
+Frontend (1): invoke('create_session', { args: { label, preset_id, market, upbit_account_id, initial_capital, ... } })
   ↓
-Backend:
-  1. 계정 enabled 확인, 키링 존재 확인
-  2. 같은 account_id의 running 세션 확인 (UNIQUE 인덱스가 이중 보호)
-  3. INSERT live_sessions (upbit_account_id = ...)
-  4. session_engine 시작
+Backend create_session:
+  1. 계정 enabled 확인, 키링 존재 확인 (account_id가 있을 때만)
+  2. INSERT live_sessions (upbit_account_id = ...) → mode='paper'로 시작
+  3. (필요 시 mode='real'로 toggle 시도는 별도 toggle_session_mode 호출)
+  ↓
+Frontend (2): invoke('start_session', { id })
+  ↓
+Backend start_session:
+  1. UNIQUE 인덱스가 같은 계정 두 번째 running real 시도를 차단 (이중 보호)
+  2. set_status 'running' + 즉시 1 cycle 실행 + 스케줄러 등록
   ↓
 Cycle:
   - session.upbit_account_id → upbit_client_or_err(id) → 주문/조회
 ```
+
+`CreateSessionArgs`에 `pub upbit_account_id: Option<i64>` (Option로 두는 이유: serde 호환 + UI 미선택 시 명시적 에러를 백엔드에서 한 곳에서 던지기 위함). 신규 세션은 None 거부.
 
 ### 5.3 계정 삭제 시
 
@@ -523,14 +559,18 @@ Backend:
 ### 수정
 - `src-tauri/src/db/schema.rs` — migration 014 등록 + 자동 흡수
 - `src-tauri/src/commands/upbit_keys.rs` — 시그니처에 account_id, 옛 커맨드 deprecate
-- `src-tauri/src/commands/trading.rs` — account_id 인자 추가
+- `src-tauri/src/commands/trading.rs` — `get_balance`/`get_position`에 account_id 추가, `manual_buy`/`manual_sell` 제거 (§4.2.6)
 - `src-tauri/src/commands/live_trading.rs` — 세션 생성 검증
 - `src-tauri/src/services/session_engine.rs` — client 생성 시 account_id 사용 + label prefix
 - `src-tauri/src/services/auto_trader.rs` — account_id 전파
 - `src-tauri/src/services/pending_order_tracker.rs` — **재구조화**: pending을 account_id로 그룹핑, 계정별 client로 reconcile (§4.2.5)
 - `src-tauri/src/models/live.rs` — `LiveSession.upbit_account_id`, `account_label` 추가
 - `src-tauri/src/db/live_repo.rs` — JOIN 추가, `count_real_sessions` 제거, `list_pending_wait_with_account` 신설
-- `src-tauri/src/commands/live_trading.rs` — `toggle_session_mode`에서 `count_real_sessions` 검사 제거
+- `src-tauri/src/commands/live_trading.rs` — `CreateSessionArgs.upbit_account_id` 추가, `toggle_session_mode`에서 `count_real_sessions` 검사 제거, `start_session`/`toggle_session_mode`에서 account 검증
+- `src-tauri/src/services/pending_order_tracker.rs` 의 호출처 → `services/session_engine.rs:350` 시그니처 변경 (`reconcile_pending_orders_for_session(db, session.id, account_id)`)
+- `src/lib/api.ts` — `manualBuy`/`manualSell` 제거, `getBalance`/`getPosition`에 accountId 인자
+- `src/stores/tradingStore.ts` — 사용처 정리 / deprecate
+- `src/components/trading/ManualOrderDialog.tsx` — 제거 또는 `ManualOrderCard` 호출로 교체
 - `src-tauri/src/lib.rs` — invoke_handler에 신규 커맨드 6개 등록
 - `src/App.tsx` — 라우트 1줄
 - `src/pages/SettingsPage.tsx` (또는 Settings 컴포넌트) — Upbit 섹션 제거, 안내로 대체
