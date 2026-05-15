@@ -146,6 +146,41 @@ export default function HistoryPage() {
   const maxAbs = Math.max(1, ...daily.map((d) => Math.abs(d.realized_pnl)));
   const chartHeight = 120;
 
+  // since~until 사이의 모든 UTC 일자를 채워서 차트의 시간축을 보존한다.
+  // 백엔드 `real_pnl_summary`의 `GROUP BY day`는 거래 있는 일자만 row를 만들기
+  // 때문에, 차트가 그 row만 18 unit 간격으로 깔면 sell이 1일뿐일 때 막대 1개만
+  // 좌측 끝에 그려지고 90일 시간 흐름이 사라진다. KPI 합산은 daily 그대로 사용.
+  const fullDaily = useMemo<DailyBucket[]>(() => {
+    if (daily.length === 0) return [];
+    const map = new Map(daily.map((d) => [d.date, d]));
+    const startStr = since || ninetyDaysAgo();
+    const endStr = until || new Date().toISOString().slice(0, 10);
+    const startMs = Date.parse(`${startStr}T00:00:00Z`);
+    const endMs = Date.parse(`${endStr}T00:00:00Z`);
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) {
+      return daily;
+    }
+    const out: DailyBucket[] = [];
+    for (let t = startMs; t <= endMs; t += 86400000) {
+      const key = new Date(t).toISOString().slice(0, 10);
+      out.push(map.get(key) ?? { date: key, trade_count: 0, realized_pnl: 0, avg_pnl_pct: 0 });
+    }
+    return out;
+  }, [daily, since, until]);
+
+  // X축 일자 라벨은 차트 폭에 비례해 12개 정도만 표시 (90일이면 매 8일).
+  const labelInterval = Math.max(1, Math.ceil(fullDaily.length / 12));
+
+  // 막대 끝 위 KRW 값 라벨용 단축 포맷: 1,667,545 → "+1.67M", -123,000 → "-123k".
+  const formatKrwShort = (v: number): string => {
+    if (v === 0) return "";
+    const sign = v > 0 ? "+" : "-";
+    const abs = Math.abs(v);
+    if (abs >= 1_000_000) return `${sign}${(abs / 1_000_000).toFixed(2)}M`;
+    if (abs >= 1_000) return `${sign}${Math.round(abs / 1_000)}k`;
+    return `${sign}${Math.round(abs)}`;
+  };
+
   // Real-mode sessions only (REAL or formerly REAL — paper sessions don't
   // produce is_real=1 trades). Show ALL sessions in the filter for
   // completeness, but mark current real with an asterisk.
@@ -217,16 +252,26 @@ export default function HistoryPage() {
         <CardHeader>
           <h2 className="text-sm font-semibold text-zinc-300">
             Daily realized P/L <span className="text-zinc-500 text-xs font-normal">(UTC 일자 기준)</span>
+            {daily.length > 0 && (
+              <span className="text-zinc-500 text-xs font-normal ml-2">
+                · 막대 최대치 ±{Math.round(maxAbs).toLocaleString()} KRW
+              </span>
+            )}
           </h2>
         </CardHeader>
         <CardContent>
           {daily.length === 0 ? (
             <p className="text-zinc-500 text-sm">기간 내 거래가 없습니다.</p>
           ) : (
-            <svg viewBox={`0 0 ${Math.max(daily.length * 18, 200)} ${chartHeight + 30}`} className="w-full">
-              {[...daily].reverse().map((d, i) => {
+            // viewBox width의 min을 카드 폭(~1200px)에 가깝게 둔다. w-full +
+            // height 미지정이면 브라우저는 viewBox aspect ratio를 유지한 채
+            // 카드 폭에 맞춰 SVG height를 산출하므로, viewBox가 정사각에 가까우면
+            // (데이터 1건일 때 200×150) SVG가 ~900px 높이로 거대화된다.
+            <svg viewBox={`0 0 ${Math.max(fullDaily.length * 18, 1200)} ${chartHeight + 30}`} className="w-full">
+              {fullDaily.map((d, i) => {
                 const h = (Math.abs(d.realized_pnl) / maxAbs) * chartHeight;
                 const isPos = d.realized_pnl > 0;
+                const isNeg = d.realized_pnl < 0;
                 const x = i * 18;
                 const y = isPos ? chartHeight - h : chartHeight;
                 return (
@@ -236,17 +281,31 @@ export default function HistoryPage() {
                       y={y}
                       width={14}
                       height={Math.max(h, 1)}
-                      fill={isPos ? "#3b82f6" : d.realized_pnl < 0 ? "#f43f5e" : "#52525b"}
+                      fill={isPos ? "#3b82f6" : isNeg ? "#f43f5e" : "#3f3f46"}
                     >
                       <title>{`${d.date}: ${d.realized_pnl.toLocaleString(undefined, { maximumFractionDigits: 0 })} KRW (${d.trade_count} trades)`}</title>
                     </rect>
-                    {i % 5 === 0 && (
+                    {/* 거래 있는 일자만 막대 끝 위에 KRW 값 라벨 — 양수는 막대 위,
+                        음수는 0선 직하 (막대 길이 무관, X축 라벨과 겹치지 않게
+                        chartHeight + 10 고정). hover title은 풀자릿수 보존. */}
+                    {d.realized_pnl !== 0 && (
+                      <text
+                        x={x + 7}
+                        y={isPos ? Math.max(y - 3, 8) : chartHeight + 10}
+                        textAnchor="middle"
+                        fontSize="9"
+                        fill={isPos ? "#93c5fd" : "#fda4af"}
+                      >
+                        {formatKrwShort(d.realized_pnl)}
+                      </text>
+                    )}
+                    {i % labelInterval === 0 && (
                       <text
                         x={x}
-                        y={chartHeight + 12}
+                        y={chartHeight + 22}
                         fill="#71717a"
                         fontSize="9"
-                        transform={`rotate(45, ${x}, ${chartHeight + 12})`}
+                        transform={`rotate(45, ${x}, ${chartHeight + 22})`}
                       >
                         {d.date.slice(5)}
                       </text>
@@ -254,7 +313,7 @@ export default function HistoryPage() {
                   </g>
                 );
               })}
-              <line x1="0" y1={chartHeight} x2={Math.max(daily.length * 18, 200)} y2={chartHeight} stroke="#3f3f46" strokeWidth="1" strokeDasharray="2,2" />
+              <line x1="0" y1={chartHeight} x2={Math.max(fullDaily.length * 18, 1200)} y2={chartHeight} stroke="#52525b" strokeWidth="1" />
             </svg>
           )}
         </CardContent>
@@ -304,7 +363,7 @@ export default function HistoryPage() {
                         {t.pnl != null ? Math.round(t.pnl).toLocaleString() : "—"}
                       </td>
                       <td className={`text-right font-data ${t.pnl_pct == null ? "text-zinc-600" : t.pnl_pct > 0 ? "text-emerald-400" : t.pnl_pct < 0 ? "text-rose-400" : "text-zinc-400"}`}>
-                        {t.pnl_pct != null ? `${t.pnl_pct >= 0 ? "+" : ""}${t.pnl_pct.toFixed(2)}%` : "—"}
+                        {t.pnl_pct != null ? `${t.pnl_pct >= 0 ? "+" : ""}${(t.pnl_pct * 100).toFixed(2)}%` : "—"}
                       </td>
                       <td className="text-zinc-500">{formatSignal(t.signal)}</td>
                     </tr>

@@ -112,7 +112,7 @@ pub fn get_session(conn: &Connection, id: i64) -> Result<Option<LiveSession>> {
         "SELECT id, user_id, label, preset_id, market, mode, status, initial_capital,
                 start_ts, real_started_at, last_cycle_ts, last_signal,
                 current_position, current_buy_price, current_buy_volume, current_equity,
-                live_return, max_daily_loss_pct, max_daily_trades, created_at
+                live_return, max_daily_loss_pct, max_daily_trades, max_order_krw, created_at
          FROM live_sessions WHERE id = ?1",
         [id],
         row_to_session,
@@ -125,7 +125,7 @@ pub fn list_sessions(conn: &Connection, user_id: i64) -> Result<Vec<LiveSession>
         "SELECT id, user_id, label, preset_id, market, mode, status, initial_capital,
                 start_ts, real_started_at, last_cycle_ts, last_signal,
                 current_position, current_buy_price, current_buy_volume, current_equity,
-                live_return, max_daily_loss_pct, max_daily_trades, created_at
+                live_return, max_daily_loss_pct, max_daily_trades, max_order_krw, created_at
          FROM live_sessions WHERE user_id = ?1 ORDER BY created_at DESC",
     )?;
     let rows = stmt.query_map([user_id], row_to_session)?;
@@ -137,7 +137,7 @@ pub fn list_running_sessions(conn: &Connection) -> Result<Vec<LiveSession>> {
         "SELECT id, user_id, label, preset_id, market, mode, status, initial_capital,
                 start_ts, real_started_at, last_cycle_ts, last_signal,
                 current_position, current_buy_price, current_buy_volume, current_equity,
-                live_return, max_daily_loss_pct, max_daily_trades, created_at
+                live_return, max_daily_loss_pct, max_daily_trades, max_order_krw, created_at
          FROM live_sessions WHERE status = 'running'",
     )?;
     let rows = stmt.query_map([], row_to_session)?;
@@ -157,6 +157,14 @@ pub fn set_session_mode(conn: &Connection, id: i64, mode: &str) -> Result<usize>
     conn.execute(
         "UPDATE live_sessions SET mode = ?1 WHERE id = ?2",
         params![mode, id],
+    )
+}
+
+/// Set the per-session BUY cap. `None` clears the cap (full balance).
+pub fn set_session_max_order_krw(conn: &Connection, id: i64, cap: Option<f64>) -> Result<usize> {
+    conn.execute(
+        "UPDATE live_sessions SET max_order_krw = ?1 WHERE id = ?2",
+        params![cap, id],
     )
 }
 
@@ -289,7 +297,8 @@ fn row_to_session(row: &rusqlite::Row) -> Result<LiveSession> {
         live_return: row.get(16)?,
         max_daily_loss_pct: row.get(17)?,
         max_daily_trades: row.get(18)?,
-        created_at: row.get(19)?,
+        max_order_krw: row.get(19)?,
+        created_at: row.get(20)?,
     })
 }
 
@@ -408,6 +417,10 @@ pub struct PendingOrder {
     pub status: String,          // "wait" | "done" | "cancel"
     pub last_checked: Option<String>,
     pub resolved_at: Option<String>,
+    /// Cost basis at SELL-placement time (NULL for BUYs).
+    /// Frozen here so late fills price correctly against the cost basis
+    /// that was current at the moment the SELL decision was made.
+    pub cost_basis_price: Option<f64>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -422,15 +435,16 @@ pub fn insert_pending_order(
     requested: f64,
     placed_at: &str,
     status: &str,
+    cost_basis_price: Option<f64>,
 ) -> Result<()> {
     conn.execute(
         "INSERT INTO pending_orders
             (uuid, session_id, side, market, ord_type, target_price, requested,
-             placed_at, status)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             placed_at, status, cost_basis_price)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT(uuid) DO UPDATE SET status = excluded.status",
         params![uuid, session_id, side, market, ord_type, target_price, requested,
-                placed_at, status],
+                placed_at, status, cost_basis_price],
     )?;
     Ok(())
 }
@@ -444,7 +458,7 @@ pub fn list_session_pending_wait(
 ) -> Result<Vec<PendingOrder>> {
     let mut stmt = conn.prepare(
         "SELECT uuid, session_id, side, market, ord_type, target_price, requested,
-                placed_at, status, last_checked, resolved_at
+                placed_at, status, last_checked, resolved_at, cost_basis_price
          FROM pending_orders WHERE session_id = ?1 AND status = 'wait'
          ORDER BY placed_at ASC",
     )?;
@@ -457,7 +471,7 @@ pub fn list_session_pending_wait(
 pub fn list_pending_wait(conn: &Connection) -> Result<Vec<PendingOrder>> {
     let mut stmt = conn.prepare(
         "SELECT uuid, session_id, side, market, ord_type, target_price, requested,
-                placed_at, status, last_checked, resolved_at
+                placed_at, status, last_checked, resolved_at, cost_basis_price
          FROM pending_orders WHERE status = 'wait' ORDER BY placed_at ASC",
     )?;
     let rows = stmt.query_map([], row_to_pending)?;
@@ -477,6 +491,7 @@ fn row_to_pending(row: &rusqlite::Row) -> Result<PendingOrder> {
         status: row.get(8)?,
         last_checked: row.get(9)?,
         resolved_at: row.get(10)?,
+        cost_basis_price: row.get(11)?,
     })
 }
 

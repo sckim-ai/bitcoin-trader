@@ -101,6 +101,10 @@ pub struct LiveSession {
     /// Auto-stop threshold: if today's is_real=1 sell count reaches this,
     /// the session is stopped. Defends against runaway loops.
     pub max_daily_trades: i32,
+    /// Per-session BUY order cap in KRW. None → use the full KRW balance
+    /// (current behaviour). When set, every BUY is `min(krw_balance, cap)`
+    /// before the 0.9995 fee buffer. Sells are always full balance.
+    pub max_order_krw: Option<f64>,
     pub created_at: String,
 }
 

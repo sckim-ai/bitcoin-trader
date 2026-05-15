@@ -108,6 +108,22 @@ mod app {
                         }
                     }
                 });
+
+                // Live cycle log stream → frontend "live:log" event. Mirrors the
+                // tick broker pattern. Lines come from `live_log!` / file_logger
+                // and reach LiveTradingPage's LiveLogPanel in real time.
+                let log_handle = app.handle().clone();
+                let mut log_rx = crate::core::file_logger::init_log_broadcast();
+                tauri::async_runtime::spawn(async move {
+                    use tauri::Emitter;
+                    loop {
+                        match log_rx.recv().await {
+                            Ok(line) => { let _ = log_handle.emit("live:log", &line); }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(_) => break,
+                        }
+                    }
+                });
                 Ok(())
             })
             .invoke_handler(tauri::generate_handler![
@@ -148,6 +164,7 @@ mod app {
                 live_trading::list_presets,
                 live_trading::delete_preset,
                 live_trading::create_session,
+                live_trading::set_session_order_cap,
                 live_trading::list_sessions,
                 live_trading::start_session,
                 live_trading::stop_session,

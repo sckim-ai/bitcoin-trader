@@ -217,6 +217,8 @@ export interface LiveSession {
   max_daily_loss_pct: number;
   /** Daily real-sell count threshold — auto-stop on reach. */
   max_daily_trades: number;
+  /** Per-session BUY cap in KRW. null = no cap (full balance). */
+  max_order_krw: number | null;
   created_at: string;
 }
 
@@ -239,6 +241,8 @@ export interface CreateSessionArgs {
   preset_id: number;
   market: string;
   initial_capital: number;
+  /** Optional per-session BUY cap in KRW. Null/omitted = no cap. */
+  max_order_krw?: number | null;
 }
 
 export interface SessionCycleOutput {

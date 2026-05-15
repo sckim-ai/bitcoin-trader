@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { SeriesMarker, Time } from "lightweight-charts";
+import { mergeSplitFills } from "./charts/mergeSplitFills";
+import type { LiveTrade } from "../../types";
 
 /**
  * Diagnostic test for the "live chart shows duplicate buy/sell labels when
@@ -13,12 +15,9 @@ import type { SeriesMarker, Time } from "lightweight-charts";
  * for this verification.
  */
 
-interface FakeTrade {
-  ts: string;
-  side: "buy" | "sell";
-  pnl_pct: number | null;
-  is_real: boolean;
-}
+// FakeTrade is just LiveTrade — using the production type lets us pass values
+// straight into mergeSplitFills() without type gymnastics.
+type FakeTrade = LiveTrade;
 
 interface FakeSession {
   id: number;
@@ -41,7 +40,8 @@ function buildMarkers(
   for (const session of sessions) {
     if (hidden.has(session.id)) continue;
     const color = colorFor(session.id, sessionIds);
-    const trades = tradesBySession[session.id] ?? [];
+    // Mirror of CandleChart.tsx: split fills합치기.
+    const trades = mergeSplitFills(tradesBySession[session.id] ?? []);
     for (const t of trades) {
       const baseLabel = t.is_real ? `${session.label} (R)` : session.label;
       const time = isoToUtcSec(t.ts) as Time;
@@ -93,7 +93,19 @@ const SELL_TS = "2026-04-21T01:00:00Z";
 const SELL_TIME = isoToUtcSec(SELL_TS);
 
 function makeSell(): FakeTrade {
-  return { ts: SELL_TS, side: "sell", pnl_pct: 0.0154, is_real: false };
+  return {
+    id: 0,
+    session_id: 0,
+    ts: SELL_TS,
+    side: "sell",
+    price: 1_000_000,
+    volume: 0.001,
+    fee: 0,
+    signal: "sell",
+    pnl: null,
+    pnl_pct: 0.0154,
+    is_real: false,
+  };
 }
 
 describe("CandleChart trade-marker construction (CandleChart.tsx:259-313)", () => {
@@ -213,6 +225,41 @@ describe("CandleChart trade-marker construction (CandleChart.tsx:259-313)", () =
     const atSell = markers.filter((m) => m.time === SELL_TIME);
     const texts = atSell.map((m) => m.text).sort();
     expect(texts).toEqual(["+1.54%", "+1.54%", "Short_156", "Short_156_v2"]);
+  });
+
+  it("split fill — same session, same (ts, side, is_real) collapses to ONE marker pair", () => {
+    // REAL 매도 분할 시 backend는 sync done row + late done row 두 개를 같은
+    // 봉(ts)에 정렬해서 적재한다. 차트 단계에서 mergeSplitFills가 둘을 합쳐
+    // 마커 stack이 (label + pnl) 2개로 줄어드는지 확인.
+    const sessions: FakeSession[] = [{ id: 1, label: "Short_156" }];
+    const sync: FakeTrade = {
+      ...makeSell(),
+      signal: "real_sell",
+      is_real: true,
+      volume: 0.0006,
+      pnl_pct: 0.02, // sync chunk: avg sell price 5,100,000원이면 +2%
+      price: 5_100_000,
+    };
+    const late: FakeTrade = {
+      ...makeSell(),
+      signal: "real_sell_late",
+      is_real: true,
+      volume: 0.0004,
+      pnl_pct: 0.01, // late chunk: avg sell price 5,050,000원이면 +1%
+      price: 5_050_000,
+    };
+    const trades: Record<number, FakeTrade[]> = { 1: [sync, late] };
+
+    const markers = buildMarkers(sessions, trades, [1], [], colorFor);
+
+    // 한 매도 결정 → 1개 마커 stack (label + pnl) = 2개 마커.
+    expect(markers).toHaveLength(2);
+    const atSell = markers.filter((m) => m.time === SELL_TIME && m.position === "aboveBar");
+    expect(atSell).toHaveLength(2);
+
+    // pnl_pct는 volume 가중평균 = (0.0006·0.02 + 0.0004·0.01) / 0.001 = 0.016 → +1.60%
+    const texts = atSell.map((m) => m.text).sort();
+    expect(texts).toEqual(["+1.60%", "Short_156 (R)"]);
   });
 
   it("real-mode session adds (R) suffix — same stacking, different label text", () => {

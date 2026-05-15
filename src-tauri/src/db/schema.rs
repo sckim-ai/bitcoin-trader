@@ -74,6 +74,20 @@ pub fn initialize(db_path: &Path) -> Result<Connection> {
             return Err(e);
         }
     }
+    let schema_v12 = include_str!("../../migrations/012_order_caps.sql");
+    if let Err(e) = conn.execute_batch(schema_v12) {
+        let msg = e.to_string();
+        if !msg.contains("duplicate column") && !msg.contains("already exists") {
+            return Err(e);
+        }
+    }
+    let schema_v13 = include_str!("../../migrations/013_pending_cost_basis.sql");
+    if let Err(e) = conn.execute_batch(schema_v13) {
+        let msg = e.to_string();
+        if !msg.contains("duplicate column") && !msg.contains("already exists") {
+            return Err(e);
+        }
+    }
     // Backfill best_return cache for pre-migration runs so the listing
     // query works uniformly. Idempotent: only touches NULL rows.
     conn.execute(

@@ -6,6 +6,7 @@ import { confirmDialog } from "../components/ui/ConfirmDialog";
 import { Plus, Trash2, AlertOctagon } from "lucide-react";
 import SessionTable from "../components/live/SessionTable";
 import NewSessionDialog from "../components/live/NewSessionDialog";
+import LiveLogPanel from "../components/live/LiveLogPanel";
 import PromoteRealDialog from "../components/live/PromoteRealDialog";
 import PendingOrdersWidget from "../components/live/PendingOrdersWidget";
 import ManualOrderCard from "../components/live/ManualOrderCard";
@@ -401,6 +402,8 @@ export default function LiveTradingPage() {
           />
         </CardContent>
       </Card>
+
+      <LiveLogPanel />
 
       {showNew && (
         <NewSessionDialog

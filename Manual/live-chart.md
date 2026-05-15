@@ -66,6 +66,49 @@ Live Trading 페이지 상단의 KRW-ETH 캔들차트와 신호 스트립차트�
 - Frontend는 이벤트를 받으면 read-only로 `getSessionSignalLog` + `loadAllSessionTrades` 만 호출 (cycle 재실행 없음)
 - 마운트 시점이 hour 경계에 맞지 않는 신규 세션은 첫 사이클까지 빈 차트를 보일 수 있음 — 다음 정각에 자동 채워짐
 
+### Live log 패널
+화면 하단 collapse 카드 — REAL cycle 진행 상황을 실시간 스트림으로 표시.
+- backend의 `live_log!` 매크로가 stderr + 파일(`%LOCALAPPDATA%/bitcoin-trader/logs/live_<YYYY-MM-DD>.log`) + UI broadcast 채널 셋 다에 같은 라인을 보냄
+- 모든 라인에 동일한 `HH:MM:SS.mmm KST` prefix
+- prefix별 색: `[real BUY]`=초록 / `[real SELL]`=빨강 / `[real cycle]`=하늘 / `[pending_tracker]`=보라 / `[realcycle]`=호박 / `[order_executor]`=노랑
+- 200줄 ring buffer, 새 라인이 오면 자동 스크롤
+- Pause 버튼: 자동 스크롤 일시정지하고 과거 라인 검토 가능. Resume 시 자동 스크롤 복구
+- Clear 버튼: 화면만 비움 (파일 로그는 보존)
+
+### 매수 한도 옵션 (BUY cap)
+새 세션 생성 시 "BUY Cap (KRW)" 입력 필드:
+- **비워두면 (기본)**: 매수 시 Upbit 계좌 전체 KRW × 0.9995 사용 — 다중 REAL 세션 운용 시 첫 매수가 전 자본 동원 가능
+- **값 입력**: 매수마다 `min(잔고, 한도) × 0.9995`로 제한. 매도는 항상 보유 전량
+- DB: `live_sessions.max_order_krw REAL` (NULL=무제한). 기존 세션은 자동으로 NULL=무제한
+- 추후 SessionTable에서 한도 변경(`set_session_order_cap` 커맨드) 가능 — UI 추가 예정
+
+### 마커 시간 정합성 (paper ↔ R 봉 정렬)
+한 번의 매수 결정에서 발생한 paper marker와 R 마커가 차트에서 **같은 봉에 stack**됩니다.
+- paper ts = strategy의 buy transition 봉 timestamp (signal_log.last)
+- R ts (동기 booking) = `data.last().candle.timestamp` (= 같은 transition 봉)
+- R ts (비동기 late booking) = `placed_at - 1h`을 정시 floor (= 그 cycle이 평가했던 confirmed 봉)
+- limit 발사 가격은 봉의 close가 아닌 **execution-time current_price** — 즉시 체결 가능성 ↑, "결정→실행" 시간 갭 최소화
+
+### 분할 fill 합침 (R 마커가 봉당 1개로 보이는 이유)
+REAL 매수/매도는 `execute_split_buy/sell`에서 50만원 임계로 N chunk로 갈라져 발사됩니다. 같은 결정에서:
+- 일부 chunk는 같은 cycle 내 done → `real_buy`/`real_sell` row
+- 일부 chunk는 wait → 다음 cycle에 `pending_order_tracker`가 done을 잡아 `real_buy_late`/`real_sell_late` row 추가
+
+DB엔 두 row가 남지만 (집계/감사 목적 보존), 차트는 [mergeSplitFills.ts](../src/components/live/charts/mergeSplitFills.ts)가 같은 `(ts, side, is_real)`을 한 마커로 합쳐 표시합니다. 가격은 volume 가중평균, volume/fee/pnl은 합계, pnl_pct는 volume 가중평균(같은 buy_price 기준 fill이면 평균 매도가 대비 손익률과 수학적으로 동일).
+
+분할 매수의 평균진입가도 backend에서 누적됩니다 — `weighted_avg_buy` 헬퍼([session_engine.rs](../src-tauri/src/services/session_engine.rs))가 sync booking과 late booking에서 모두 호출되어 `live_sessions.current_buy_price`가 가중평균으로 갱신됩니다. 이 평균이 다음 매도의 pnl_pct 기준이 되므로, chunk 가격이 갈려도 손익률이 정확.
+
+### pnl_pct 단위 (분수형 single source of truth)
+`live_trades.pnl_pct` 컬럼은 **분수형**(예: 0.0194 = 1.94%)으로 저장합니다. paper 전략의 `(sell - buy) / buy`와 동일 단위. real sell 두 경로(sync/late)도 분수형으로 통일. 화면 표시 시 일률 ×100을 적용해 `+1.94%` 같은 라벨로 그립니다. 로그(`[real SELL] (P/L: ...%)`)와 알림 embed는 호출부에서 표시 시점에 `× 100.0` 적용. `pnl` 컬럼은 KRW 절대값이며 회로차단기(`today_realized_pnl_pct`)는 이쪽을 사용 — 분리 보존.
+
+### 확정 봉 정책 (closed-bar policy)
+차트에 표시되는 매수/매도 마커, 신호 스트립, 실거래 주문 결정 모두 **마감된 봉만**으로 평가됩니다.
+- [session_engine.rs](../src-tauri/src/services/session_engine.rs) `run_session_cycle`이 cycle 진입 즉시 `filter_confirmed_candles`로 미마감 현재 봉을 잘라내고 그 결과로만 strategy를 시뮬레이션
+- 따라서 "16:00봉이 형성 중"인 16:30 시점에 사이클이 돌면 16:00봉은 평가에서 제외 → 15:00봉까지가 기준
+- 17:00 정각이 지난 다음 사이클부터 16:00봉이 마감된 데이터로 평가에 포함됨 → 차트 마커도 그때 박힘
+- 페이퍼/실거래 모두 같은 확정 윈도우 사용 → "차트엔 매수 화살표가 보이는데 세션은 buy ready / idle" 같은 갭 발생 안 함
+- 트레이드오프: "이 봉 끝나면 살 것 같다" 미리보기는 표시되지 않음 — 신호 안정성(미마감 봉의 tick 출렁임에 마커가 깜빡이지 않음)과 일관성 우선
+
 이 단방향 흐름은 이전 `refresh_session_cycle` IPC 명령이 별도 SQLite connection으로 같은 세션의 cycle을 동시 실행하던 race condition을 제거합니다 (live_trades에 paper trade row가 ×2로 쌓이던 증상).
 
 ## 관련 파일

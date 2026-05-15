@@ -11,6 +11,7 @@ interface Props {
     preset_id: number;
     market: string;
     initial_capital: number;
+    max_order_krw: number | null;
   }) => void;
 }
 
@@ -19,6 +20,7 @@ export default function NewSessionDialog({ presets, onClose, onSubmit }: Props) 
   const [labelTouched, setLabelTouched] = useState(false);
   const [presetId, setPresetId] = useState<number | null>(null);
   const [capital, setCapital] = useState(1_000_000);
+  const [orderCap, setOrderCap] = useState<string>("");
 
   useEffect(() => {
     if (presets.length > 0 && presetId == null) setPresetId(presets[0].id);
@@ -77,6 +79,21 @@ export default function NewSessionDialog({ presets, onClose, onSubmit }: Props) 
           <Input type="number" value={capital} onChange={(e) => setCapital(Number(e.target.value))} />
         </div>
 
+        <div>
+          <label className="text-xs text-zinc-500 block mb-1">
+            BUY Cap (KRW) <span className="text-zinc-600">— optional, blank = full balance</span>
+          </label>
+          <Input
+            type="number"
+            value={orderCap}
+            placeholder="비워두면 계좌 전체 KRW로 매수"
+            onChange={(e) => setOrderCap(e.target.value)}
+          />
+          <p className="text-[11px] text-zinc-600 mt-1">
+            REAL 모드에서 매 매수가 min(잔고, 한도) × 0.9995로 제한됩니다. 매도는 항상 보유 전량.
+          </p>
+        </div>
+
         <div className="text-xs text-zinc-500 bg-zinc-800/40 rounded-lg p-3 space-y-2">
           <div>
             <div className="text-zinc-400 mb-1">Backtest window</div>
@@ -112,11 +129,13 @@ export default function NewSessionDialog({ presets, onClose, onSubmit }: Props) 
           <Button
             disabled={!canSubmit}
             onClick={() => {
+              const capParsed = orderCap.trim() === "" ? null : Number(orderCap);
               onSubmit({
                 label: label.trim(),
                 preset_id: presetId!,
                 market: "KRW-ETH",
                 initial_capital: capital,
+                max_order_krw: capParsed != null && capParsed > 0 ? capParsed : null,
               });
             }}
           >

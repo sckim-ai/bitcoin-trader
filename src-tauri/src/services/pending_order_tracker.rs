@@ -11,11 +11,28 @@
 
 use crate::api::upbit::UpbitClient;
 use crate::db::live_repo;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, Timelike, Utc};
 use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
 
 type BoxErr = Box<dyn std::error::Error + Send + Sync>;
+
+/// Compute the trade-row ts for a late fill: the strategy's transition bar
+/// (one full bar BEFORE the cycle that placed the order, floored to the bar
+/// boundary). Aligns the R marker on the same candle as the paper marker.
+///
+/// `placed_at` is the wall-clock when the order was sent — typically the
+/// hour cycle's entry +30s. Subtracting 1h and flooring gives the previous
+/// bar's start, which is the bar the strategy actually evaluated.
+pub fn trigger_bar_ts(placed_at: &str) -> Option<String> {
+    let placed = DateTime::parse_from_rfc3339(placed_at).ok()?
+        .with_timezone(&Utc);
+    let trigger = placed - Duration::hours(1);
+    let floored = trigger.with_minute(0)?
+        .with_second(0)?
+        .with_nanosecond(0)?;
+    Some(floored.to_rfc3339())
+}
 
 /// 1 hour — a stale `wait` order beyond this is auto-cancelled.
 pub const STALE_AFTER: Duration = Duration::hours(1);
@@ -65,6 +82,22 @@ pub async fn reconcile_pending_orders(
                 let executed = order.executed_volume_f64();
                 let (notifier, session_for_notif) = {
                     let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
+                    // Atomic CAS: claim ownership of this row. await 경계에서 lock이
+                    // 풀리는 동안 다른 세션의 cycle reconciler가 같은 wait row를 잡아
+                    // 두 번 booking하던 race를 막는다 (phantom row 발생의 근본 원인).
+                    // affected_rows == 0 이면 이미 다른 트래커가 처리한 row → skip.
+                    let claimed = conn.execute(
+                        "UPDATE pending_orders SET status='done', resolved_at=?1, last_checked=?1
+                         WHERE uuid=?2 AND status='wait'",
+                        rusqlite::params![now.to_rfc3339(), p.uuid],
+                    ).unwrap_or(0);
+                    if claimed == 0 {
+                        crate::live_log!(
+                            "[pending_tracker] DONE skip {} — already claimed by another cycle",
+                            p.uuid,
+                        );
+                        continue;
+                    }
                     if executed > 0.0 {
                         let target_price = p.target_price.unwrap_or(0.0);
                         let booked_price = if target_price > 0.0 { target_price } else {
@@ -73,57 +106,94 @@ pub async fn reconcile_pending_orders(
                         let fee_rate = 0.0005;
                         let session = live_repo::get_session(&conn, p.session_id)
                             .map_err(|e| -> BoxErr { e.to_string().into() })?;
+                        // Late fill ts → strategy의 transition 봉 timestamp.
+                        // paper marker가 그 봉에 박히므로, R 마커도 같은 봉에 stack.
+                        let booked_ts = trigger_bar_ts(&p.placed_at)
+                            .unwrap_or_else(|| now.to_rfc3339());
                         if let Some(s) = session {
                             // signal 명을 _late로 구분해 same-cycle synchronous 경로
                             // (real_buy/real_sell)와의 더블북을 SQL에서 식별 가능하게.
                             if p.side == "bid" {
                                 let _ = live_repo::insert_trade(
-                                    &conn, p.session_id, &now.to_rfc3339(), "buy",
+                                    &conn, p.session_id, &booked_ts, "buy",
                                     booked_price, executed,
                                     booked_price * executed * fee_rate,
                                     "real_buy_late", None, None, true,
                                 );
+                                // 분할 매수 누적: 같은 매수 결정의 sync done이
+                                // 이미 booked되어 있으면 session에 그 가격/수량이
+                                // 남아있다 → late chunk와 가중평균하여 평균진입가 보존.
+                                let (prev_p, prev_v) = if s.current_position == "holding" {
+                                    (s.current_buy_price, s.current_buy_volume)
+                                } else {
+                                    (None, None)
+                                };
+                                let (avg_price, avg_volume) =
+                                    crate::services::session_engine::weighted_avg_buy(
+                                        prev_p, prev_v, booked_price, executed,
+                                    );
                                 let _ = live_repo::update_session_cycle(
                                     &conn, p.session_id,
                                     s.last_cycle_ts.as_deref().unwrap_or(""),
                                     s.last_signal.as_deref().unwrap_or(""),
                                     "holding",
-                                    Some(booked_price), Some(executed),
+                                    Some(avg_price), Some(avg_volume),
                                     s.current_equity.unwrap_or(s.initial_capital),
                                     s.live_return,
                                 );
                             } else if p.side == "ask" {
-                                let buy_price = s.current_buy_price.unwrap_or(0.0);
+                                // Cost basis from the snapshot frozen at SELL
+                                // placement time (migration 013). Falls back to
+                                // current session state for legacy rows that
+                                // pre-date the snapshot column.
+                                let buy_price = p.cost_basis_price
+                                    .or(s.current_buy_price)
+                                    .unwrap_or(0.0);
                                 let pnl = if buy_price > 0.0 {
                                     (booked_price - buy_price) * executed
                                 } else { 0.0 };
+                                // 분수형으로 저장 (paper 전략 / sync real_sell과 단위 일치).
+                                // 차트는 일률 ×100 표시.
                                 let pnl_pct = if buy_price > 0.0 {
-                                    (booked_price - buy_price) / buy_price * 100.0
+                                    (booked_price - buy_price) / buy_price
                                 } else { 0.0 };
                                 let _ = live_repo::insert_trade(
-                                    &conn, p.session_id, &now.to_rfc3339(), "sell",
+                                    &conn, p.session_id, &booked_ts, "sell",
                                     booked_price, executed,
                                     booked_price * executed * fee_rate,
                                     "real_sell_late", Some(pnl), Some(pnl_pct), true,
                                 );
+                                // 분할 매도(보통 3 청크)에서 한 청크가 처리되어도
+                                // 남은 청크들이 같은 cost basis 로 P/L 계산할 수
+                                // 있도록 current_buy_price 를 보존한다. 잔량이
+                                // MIN_ORDER 미만일 때만 idle 로 전이 — 동기 매도
+                                // 경로(session_engine.rs)와 동일한 가드.
+                                let prev_volume = s.current_buy_volume.unwrap_or(0.0);
+                                let remaining = (prev_volume - executed).max(0.0);
+                                let still_holding = remaining * booked_price
+                                    >= crate::services::order_executor::MIN_ORDER_KRW;
+                                let (new_status, new_price, new_volume) = if still_holding {
+                                    ("holding", s.current_buy_price, Some(remaining))
+                                } else {
+                                    ("idle", None, None)
+                                };
                                 let _ = live_repo::update_session_cycle(
                                     &conn, p.session_id,
                                     s.last_cycle_ts.as_deref().unwrap_or(""),
                                     s.last_signal.as_deref().unwrap_or(""),
-                                    "idle",
-                                    None, None,
+                                    new_status,
+                                    new_price, new_volume,
                                     s.current_equity.unwrap_or(s.initial_capital),
                                     s.live_return,
                                 );
-                                eprintln!(
-                                    "[pending_tracker] LATE SELL booked {:.8} @ {:.0} (P/L: {:.2}%)",
-                                    executed, booked_price, pnl_pct,
+                                crate::live_log!(
+                                    "[pending_tracker] LATE SELL booked {:.8} @ {:.0} (P/L: {:.2}%, remaining={:.8}, status={})",
+                                    executed, booked_price, pnl_pct * 100.0, remaining, new_status,
                                 );
                             }
                         }
                     }
-                    live_repo::mark_pending_resolved(&conn, &p.uuid, "done", &now.to_rfc3339())
-                        .map_err(|e| -> BoxErr { e.to_string().into() })?;
+                    // mark_pending_resolved는 위의 atomic CAS가 이미 수행함 (status='done').
 
                     let notifier = crate::notifications::manager::NotificationManager::from_db(&conn, 1);
                     let session_for_notif = live_repo::get_session(&conn, p.session_id)
@@ -173,7 +243,7 @@ pub async fn reconcile_pending_orders(
             _ => {
                 // Still 'wait' (or unknown). Cancel if past stale threshold.
                 if now - placed > STALE_AFTER {
-                    eprintln!(
+                    crate::live_log!(
                         "[pending_tracker] STALE {} ({}h+) — sending cancel",
                         p.uuid,
                         STALE_AFTER.num_hours(),

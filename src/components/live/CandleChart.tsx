@@ -9,6 +9,7 @@ import {
   type ChartCandle, type RunningCandleState,
 } from "./charts/runningCandle";
 import { colorFor } from "./charts/sessionPalette";
+import { mergeSplitFills } from "./charts/mergeSplitFills";
 
 interface Props {
   /** Already filtered by parent to the visible time window. */
@@ -259,7 +260,10 @@ export default function CandleChart({
     for (const session of sessions) {
       if (hidden.has(session.id)) continue;
       const color = colorFor(session.id, sessionIds);
-      const trades = tradesBySession[session.id] ?? [];
+      // Split fill 합치기: 같은 (ts, side, is_real) row N개 → 1개 마커.
+      // REAL 매수/매도가 chunk로 갈라져 sync done + late done 두 row가 같은
+      // 봉에 stack되는 시각적 중복을 차트 단계에서 제거.
+      const trades = mergeSplitFills(tradesBySession[session.id] ?? []);
       for (const t of trades) {
         const baseLabel = t.is_real ? `${session.label} (R)` : session.label;
         const time = isoToUtcSec(t.ts) as UTCTimestamp;

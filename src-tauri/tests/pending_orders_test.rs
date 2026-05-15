@@ -20,6 +20,7 @@ fn setup_db() -> Connection {
     conn.execute_batch(include_str!("../migrations/009_baseline_metrics.sql")).unwrap();
     conn.execute_batch(include_str!("../migrations/010_pending_orders.sql")).unwrap();
     conn.execute_batch(include_str!("../migrations/011_safety_limits.sql")).unwrap();
+    conn.execute_batch(include_str!("../migrations/013_pending_cost_basis.sql")).unwrap();
     conn
 }
 
@@ -37,17 +38,18 @@ fn insert_then_list_picks_up_wait_only() {
     let sid = make_session(&conn);
     insert_pending_order(
         &conn, "u-wait", sid, "bid", "KRW-ETH", "price", None, 50_000.0,
-        "2026-04-29T00:00:00Z", "wait",
+        "2026-04-29T00:00:00Z", "wait", None,
     ).unwrap();
     insert_pending_order(
         &conn, "u-done", sid, "ask", "KRW-ETH", "market", None, 0.05,
-        "2026-04-29T00:00:00Z", "done",
+        "2026-04-29T00:00:00Z", "done", Some(3_000_000.0),
     ).unwrap();
     let wait = list_pending_wait(&conn).unwrap();
     assert_eq!(wait.len(), 1);
     assert_eq!(wait[0].uuid, "u-wait");
     assert_eq!(wait[0].side, "bid");
     assert_eq!(wait[0].status, "wait");
+    assert_eq!(wait[0].cost_basis_price, None);
 }
 
 #[test]
@@ -56,7 +58,7 @@ fn mark_done_drops_from_wait_list() {
     let sid = make_session(&conn);
     insert_pending_order(
         &conn, "u-1", sid, "bid", "KRW-ETH", "price", None, 50_000.0,
-        "2026-04-29T00:00:00Z", "wait",
+        "2026-04-29T00:00:00Z", "wait", None,
     ).unwrap();
     let n = mark_pending_resolved(&conn, "u-1", "done", "2026-04-29T00:01:00Z").unwrap();
     assert_eq!(n, 1);
@@ -69,7 +71,7 @@ fn touch_pending_check_updates_timestamp_only() {
     let sid = make_session(&conn);
     insert_pending_order(
         &conn, "u-1", sid, "bid", "KRW-ETH", "price", None, 50_000.0,
-        "2026-04-29T00:00:00Z", "wait",
+        "2026-04-29T00:00:00Z", "wait", None,
     ).unwrap();
     let n = touch_pending_check(&conn, "u-1", "2026-04-29T00:30:00Z").unwrap();
     assert_eq!(n, 1);
@@ -86,11 +88,11 @@ fn upsert_replaces_status_on_conflict() {
     let sid = make_session(&conn);
     insert_pending_order(
         &conn, "u-1", sid, "bid", "KRW-ETH", "price", None, 50_000.0,
-        "2026-04-29T00:00:00Z", "wait",
+        "2026-04-29T00:00:00Z", "wait", None,
     ).unwrap();
     insert_pending_order(
         &conn, "u-1", sid, "bid", "KRW-ETH", "price", None, 50_000.0,
-        "2026-04-29T00:00:00Z", "done",
+        "2026-04-29T00:00:00Z", "done", None,
     ).unwrap();
     assert_eq!(list_pending_wait(&conn).unwrap().len(), 0);
 }
@@ -102,7 +104,7 @@ fn cascade_delete_removes_pending_orders() {
     let sid = make_session(&conn);
     insert_pending_order(
         &conn, "u-1", sid, "bid", "KRW-ETH", "price", None, 50_000.0,
-        "2026-04-29T00:00:00Z", "wait",
+        "2026-04-29T00:00:00Z", "wait", None,
     ).unwrap();
     delete_session(&conn, sid).unwrap();
     assert_eq!(list_pending_wait(&conn).unwrap().len(), 0);

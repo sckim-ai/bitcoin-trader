@@ -30,6 +30,9 @@ export const deletePreset = (id: number): Promise<void> =>
 export const listSessions = (): Promise<LiveSession[]> => invoke("list_sessions");
 export const createSession = (args: CreateSessionArgs): Promise<number> =>
   invoke("create_session", { args });
+/// Update or clear a session's BUY cap (KRW). Pass null to clear (full balance).
+export const setSessionOrderCap = (id: number, max_order_krw: number | null): Promise<void> =>
+  invoke("set_session_order_cap", { id, maxOrderKrw: max_order_krw });
 export const startSession = (id: number): Promise<void> =>
   invoke("start_session", { id });
 export const stopSession = (id: number): Promise<void> =>

@@ -201,7 +201,11 @@ pub async fn manual_market_order(
                     ).unwrap_or(0.0);
                     if buy_price > 0.0 {
                         let pnl = (booked_price - buy_price) * booked_volume;
-                        let pnl_pct = (booked_price - buy_price) / buy_price * 100.0;
+                        // 분수형(0.0064 = 0.64%). live_trades.pnl_pct는 paper 전략과
+                        // session_engine real_sell, pending_order_tracker late_sell이
+                        // 모두 분수형이므로 manual_sell도 동일 단위로 통일.
+                        // 차트(CandleChart.tsx)가 ×100해서 표시.
+                        let pnl_pct = (booked_price - buy_price) / buy_price;
                         (Some(pnl), Some(pnl_pct))
                     } else {
                         (None, None)

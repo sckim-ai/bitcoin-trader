@@ -95,6 +95,9 @@ pub struct CreateSessionArgs {
     pub preset_id: i64,
     pub market: String,
     pub initial_capital: f64,
+    /// Optional per-session BUY cap in KRW. None / omitted → use full balance.
+    #[serde(default)]
+    pub max_order_krw: Option<f64>,
 }
 
 /// Normalize a preset's since_ts ("YYYY-MM-DD" or RFC3339) to an RFC3339
@@ -131,7 +134,7 @@ pub fn create_session(
         .and_then(normalize_since)
         .unwrap_or_else(|| Utc::now().to_rfc3339());
 
-    live_repo::insert_session(
+    let id = live_repo::insert_session(
         &conn,
         1,
         &args.label,
@@ -141,7 +144,29 @@ pub fn create_session(
         args.initial_capital,
         &start_ts,
     )
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+
+    if let Some(cap) = args.max_order_krw {
+        if cap > 0.0 {
+            live_repo::set_session_max_order_krw(&conn, id, Some(cap))
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(id)
+}
+
+#[tauri::command]
+pub fn set_session_order_cap(
+    id: i64,
+    max_order_krw: Option<f64>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    // Treat 0 / negative as "clear cap". Frontend passes None to clear too.
+    let normalized = max_order_krw.filter(|&v| v > 0.0);
+    live_repo::set_session_max_order_krw(&conn, id, normalized)
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]

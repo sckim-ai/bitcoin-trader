@@ -23,6 +23,45 @@ pub struct SessionCycleOutput {
     pub live_return: f64,
 }
 
+/// Compute the KRW amount actually sent to the exchange given a balance
+/// and an optional per-session cap. Single source of truth for the BUY
+/// sizing policy so it can be unit-tested without the full Upbit cycle.
+///
+///   * `balance`  — current KRW available on the Upbit account
+///   * `cap`      — `None` → no cap (use full balance), `Some(v)` → at most `v` KRW
+///   * Returns the post-fee-buffer order amount (× 0.9995).
+pub fn compute_buy_amount(balance: f64, cap: Option<f64>) -> f64 {
+    balance.min(cap.unwrap_or(f64::INFINITY)) * 0.9995
+}
+
+/// 분할 매수의 평균진입가/누적 수량을 누적한다.
+///
+/// 한 매수 결정이 `execute_split_buy`로 N chunk로 갈라져 일부는 같은 cycle에
+/// done(`real_buy`), 일부는 다음 cycle에 late done(`real_buy_late`)이 되는데,
+/// 이전엔 두 booking이 `current_buy_price`를 *덮어써서* 평균진입가가 마지막
+/// chunk 가격으로 망가졌다. 이 함수는 두 booking을 가중평균으로 잇는다.
+///
+/// 호출자 책임: 매도가 일어나 idle로 돌아오면 (None, None)으로 reset.
+/// 이 함수는 누적 전용으로 reset은 모른다.
+pub fn weighted_avg_buy(
+    prev_price: Option<f64>,
+    prev_volume: Option<f64>,
+    new_price: f64,
+    new_volume: f64,
+) -> (f64, f64) {
+    let pp = prev_price.unwrap_or(0.0);
+    let pv = prev_volume.unwrap_or(0.0);
+    if pp <= 0.0 || pv <= 0.0 {
+        return (new_price, new_volume);
+    }
+    let total_vol = pv + new_volume;
+    if total_vol <= 0.0 {
+        return (new_price, new_volume);
+    }
+    let avg_price = (pp * pv + new_price * new_volume) / total_vol;
+    (avg_price, total_vol)
+}
+
 /// Run one cycle for a single session. Loads the FULL history from local DB
 /// — every hourly candle from `session.start_ts` (= preset.since_ts) to the
 /// most recent persisted bar — and replays the entire strategy. The output
@@ -51,6 +90,13 @@ pub async fn run_session_cycle(
     let data: Vec<_> = data.into_iter()
         .filter(|md| md.candle.timestamp >= session_start)
         .collect();
+    // Drop the still-forming current candle BEFORE running the strategy so
+    // simulation, chart markers, and signal_log are all derived from confirmed
+    // bars only — same window the real-cycle order decision uses. Without this
+    // trim the chart could show a "buy" arrow on the live bar while the order
+    // path stayed at "buy ready", because the unconfirmed bar's intra-hour
+    // movement flipped the sim's last_position to 1.
+    let data = filter_confirmed_candles(data);
 
     if data.len() < 15 {
         return Ok(SessionCycleOutput {
@@ -324,39 +370,14 @@ async fn real_reconcile_step<'a>(
     let (status, rec_buy_price, rec_buy_volume) =
         reconcile_position(&db_pos, coin_balance, current_price);
 
-    // For signal extraction, prefer a confirmed-window sim — but if the
-    // confirmed input is the same length as `data`, the existing `result`
-    // applies and we skip re-simulation. (Re-running the strategy here is
-    // safe but redundant on most cycles where the trailing candle is
-    // already complete.)
-    let confirmed = filter_confirmed_candles(data.to_vec());
-    let sim_signal_owned;
-    let sim_signal = if confirmed.len() == data.len() {
-        last_signal_from_simulation(result).to_string()
-    } else {
-        // Re-run the strategy on the trimmed window so the live signal
-        // doesn't include the still-forming candle. Reuse the registry +
-        // params from the surrounding scope by constructing a fresh
-        // simulation here is non-trivial without plumbing them through;
-        // instead, fall back to inspecting the original log up to the
-        // last confirmed timestamp.
-        let cutoff = confirmed.last().map(|m| m.candle.timestamp).unwrap_or_else(Utc::now);
-        let last = result.signal_log.iter().rev()
-            .find(|e| {
-                chrono::DateTime::parse_from_rfc3339(&e.timestamp)
-                    .map(|dt| dt.with_timezone(&Utc) <= cutoff)
-                    .unwrap_or(false)
-            })
-            .map(|e| e.signal_type.clone())
-            .unwrap_or_else(|| "ready".into());
-        sim_signal_owned = last;
-        sim_signal_owned.clone()
-    };
+    // `data` was trimmed to confirmed bars at cycle entry, so `result` is
+    // already a confirmed-window simulation. Read its last signal directly.
+    let sim_signal = last_signal_from_simulation(result).to_string();
 
     let position_int = if status == "holding" { 1 } else { 0 };
     let final_signal = resolve_live_signal(&sim_signal, position_int);
 
-    eprintln!(
+    crate::live_log!(
         "[real cycle] session={} sim={} status={} coin={:.6} krw={:.0} price={:.0} → final={}",
         session.id, sim_signal, status, coin_balance, krw_balance, current_price, final_signal,
     );
@@ -385,12 +406,20 @@ async fn real_reconcile_step<'a>(
     use crate::services::order_executor::{execute_split_buy, execute_split_sell, MIN_ORDER_KRW};
     let now_ts = Utc::now().to_rfc3339();
     let fee_rate = 0.0005;
-    // Target price = last confirmed bar's close. Falls back to current_price
-    // if the data window has no close (shouldn't happen in production).
-    let target_price = confirmed
+    // Target price = real-time market price at execution time. Earlier
+    // policy used the last confirmed bar's close, which often left limits
+    // unfilled for an hour when the bar's close lagged the live price; the
+    // 1-hour gap between buy decision and reconcile booking was traced to
+    // exactly this. Pegging at `current_price` makes a limit fill near-
+    // instantly and removes the second 1-hour layer of the visible time gap.
+    let target_price = current_price;
+    // Trade-row ts for booking. Paper marker uses the strategy's transition-
+    // bar timestamp (last confirmed bar) so paper + real markers stack on the
+    // same candle on the chart.
+    let bar_ts = data
         .last()
-        .map(|m| m.candle.close)
-        .unwrap_or(current_price);
+        .map(|m| m.candle.timestamp.to_rfc3339())
+        .unwrap_or_else(|| now_ts.clone());
 
     // Notification helper. Built ONCE up front; the actual .await on send is
     // done after we drop the DB MutexGuard (Send rule). The manager itself is
@@ -403,9 +432,12 @@ async fn real_reconcile_step<'a>(
 
     match final_signal {
         "buy" if krw_balance > MIN_ORDER_KRW => {
-            let order_krw = krw_balance * 0.9995;
-            eprintln!(
-                "[real BUY] session={} {:.0} KRW @ limit {:.0} (close)",
+            // Apply the optional per-session BUY cap. None → use full balance
+            // (default behaviour). When set, every BUY is capped at min(balance,
+            // cap) before the 0.9995 fee buffer. Sells stay full balance.
+            let order_krw = compute_buy_amount(krw_balance, session.max_order_krw);
+            crate::live_log!(
+                "[real BUY] session={} {:.0} KRW @ limit {:.0} (current px)",
                 session.id, order_krw, target_price,
             );
             let result = execute_split_buy(&upbit, &session.market, order_krw, target_price).await;
@@ -428,14 +460,25 @@ async fn real_reconcile_step<'a>(
                         let booked_price = target_price; // limit price ≈ fill price
                         let booked_volume = done_executed;
                         live_repo::insert_trade(
-                            &conn, session.id, &now_ts, "buy",
+                            &conn, session.id, &bar_ts, "buy",
                             booked_price, booked_volume,
                             booked_price * booked_volume * fee_rate,
                             "real_buy", None, None, true,
                         ).map_err(|e| -> BoxErr { e.to_string().into() })?;
+                        // 분할 매수 누적: 직전 cycle이 이미 holding이었다면 가중평균.
+                        // 이번 cycle의 BUY는 보통 idle→holding 전이라 prev=None이지만,
+                        // late fill로 holding 중에 추가 BUY가 들어오는 시나리오를 위해
+                        // 일관되게 가중평균 경로를 탄다.
+                        let (prev_p, prev_v) = if session.current_position == "holding" {
+                            (session.current_buy_price, session.current_buy_volume)
+                        } else {
+                            (None, None)
+                        };
+                        let (avg_price, avg_volume) =
+                            weighted_avg_buy(prev_p, prev_v, booked_price, booked_volume);
                         applied_status = "holding";
-                        applied_buy_price = Some(booked_price);
-                        applied_buy_volume = Some(booked_volume);
+                        applied_buy_price = Some(avg_price);
+                        applied_buy_volume = Some(avg_volume);
                     }
                     for o in result.orders.iter() {
                         let initial = if o.is_done() { "done" } else { "wait" };
@@ -443,11 +486,11 @@ async fn real_reconcile_step<'a>(
                             &conn, &o.uuid, session.id, "bid", &session.market,
                             &o.ord_type, Some(target_price),
                             order_krw / result.orders.len() as f64,
-                            &now_ts, initial,
+                            &now_ts, initial, None,
                         );
                     }
                 } // ← MutexGuard dropped here
-                eprintln!(
+                crate::live_log!(
                     "[real BUY] chunks={} done={} wait={} executed={:.8}",
                     result.orders.len(), done_orders.len(), wait_orders.len(), done_executed,
                 );
@@ -485,8 +528,8 @@ async fn real_reconcile_step<'a>(
             }
         }
         "sell" if coin_balance * current_price > MIN_ORDER_KRW => {
-            eprintln!(
-                "[real SELL] session={} vol={:.8} @ limit {:.0} (close)",
+            crate::live_log!(
+                "[real SELL] session={} vol={:.8} @ limit {:.0} (current px)",
                 session.id, coin_balance, target_price,
             );
             let result = execute_split_sell(
@@ -509,11 +552,14 @@ async fn real_reconcile_step<'a>(
                         let pnl = if buy_price > 0.0 {
                             (booked_price - buy_price) * booked_volume
                         } else { 0.0 };
+                        // pnl_pct는 분수형(0.0194 = 1.94%)으로 저장 — paper 전략과 단위 통일.
+                        // 차트 렌더러(CandleChart.tsx)는 일률 ×100으로 표시하므로
+                        // 여기서 100을 곱해 저장하면 화면에 100배로 박힘.
                         let pnl_pct = if buy_price > 0.0 {
-                            (booked_price - buy_price) / buy_price * 100.0
+                            (booked_price - buy_price) / buy_price
                         } else { 0.0 };
                         live_repo::insert_trade(
-                            &conn, session.id, &now_ts, "sell",
+                            &conn, session.id, &bar_ts, "sell",
                             booked_price, booked_volume,
                             booked_price * booked_volume * fee_rate,
                             "real_sell", Some(pnl), Some(pnl_pct), true,
@@ -524,19 +570,26 @@ async fn real_reconcile_step<'a>(
                             applied_buy_price = None;
                             applied_buy_volume = None;
                         }
-                        crate::live_log!("[realSELL] booked done={:.8} (P/L: {:.2}%)", booked_volume, pnl_pct);
+                        crate::live_log!("[realSELL] booked done={:.8} (P/L: {:.2}%)", booked_volume, pnl_pct * 100.0);
                     }
+                    // Snapshot the cost basis at SELL placement time. Late
+                    // fills resolved days later read this — not the live
+                    // session.current_buy_price — so P/L is priced against
+                    // the correct cost basis even if a new BUY has updated
+                    // the position in the meantime.
+                    let cost_basis_snapshot =
+                        if rec_buy_price > 0.0 { Some(rec_buy_price) } else { None };
                     for o in result.orders.iter() {
                         let initial = if o.is_done() { "done" } else { "wait" };
                         let _ = live_repo::insert_pending_order(
                             &conn, &o.uuid, session.id, "ask", &session.market,
                             &o.ord_type, Some(target_price),
                             coin_balance / result.orders.len() as f64,
-                            &now_ts, initial,
+                            &now_ts, initial, cost_basis_snapshot,
                         );
                     }
                 } // ← MutexGuard dropped here
-                eprintln!(
+                crate::live_log!(
                     "[real SELL] chunks={} done={} wait={}",
                     result.orders.len(), done_orders.len(), wait_orders.len(),
                 );
@@ -622,6 +675,35 @@ mod tests {
         conn.execute_batch(include_str!("../../migrations/010_pending_orders.sql")).unwrap();
         conn.execute_batch(include_str!("../../migrations/011_safety_limits.sql")).unwrap();
         conn
+    }
+
+    use super::weighted_avg_buy;
+
+    /// Bug #2 회귀: 분할 매수의 평균진입가 누적. 이전엔 두 번째 booking이
+    /// 첫 번째를 덮어써서 마지막 chunk 가격이 buy_price가 됐다.
+    #[test]
+    fn weighted_avg_buy_accumulates_split_fills() {
+        // 첫 매수 (idle → holding): prev 없음 → 새 값 그대로.
+        let (p, v) = weighted_avg_buy(None, None, 5_000_000.0, 0.0006);
+        assert_eq!(p, 5_000_000.0);
+        assert_eq!(v, 0.0006);
+
+        // 두 번째 chunk(late fill): 가중평균.
+        let (p2, v2) = weighted_avg_buy(Some(p), Some(v), 5_050_000.0, 0.0004);
+        // (5_000_000·0.0006 + 5_050_000·0.0004) / 0.001 = 5_020_000
+        assert!((p2 - 5_020_000.0).abs() < 1e-6);
+        assert!((v2 - 0.001).abs() < 1e-12);
+    }
+
+    #[test]
+    fn weighted_avg_buy_handles_zero_prev() {
+        // prev_price 또는 prev_volume이 0/None이면 새 값 그대로 — divide-by-zero 방지.
+        let (p, v) = weighted_avg_buy(Some(0.0), Some(0.0), 4_000_000.0, 0.0005);
+        assert_eq!(p, 4_000_000.0);
+        assert_eq!(v, 0.0005);
+        let (p2, v2) = weighted_avg_buy(Some(4_000_000.0), Some(0.0), 4_100_000.0, 0.0003);
+        assert_eq!(p2, 4_100_000.0);
+        assert_eq!(v2, 0.0003);
     }
 
     /// Unit-level test: diff behaviour with a mocked trade sequence.
