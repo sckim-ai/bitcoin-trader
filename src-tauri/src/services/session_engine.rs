@@ -674,6 +674,9 @@ mod tests {
         conn.execute_batch(include_str!("../../migrations/009_baseline_metrics.sql")).unwrap();
         conn.execute_batch(include_str!("../../migrations/010_pending_orders.sql")).unwrap();
         conn.execute_batch(include_str!("../../migrations/011_safety_limits.sql")).unwrap();
+        conn.execute_batch(include_str!("../../migrations/012_order_caps.sql")).unwrap();
+        conn.execute_batch(include_str!("../../migrations/013_pending_cost_basis.sql")).unwrap();
+        conn.execute_batch(include_str!("../../migrations/014_upbit_accounts.sql")).unwrap();
         conn
     }
 
@@ -712,7 +715,7 @@ mod tests {
     fn test_diff_inserts_only_new_trades() {
         let conn = setup_conn();
         let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None, None, None).unwrap();
-        let sid = insert_session(&conn, 1, "S", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z").unwrap();
+        let sid = insert_session(&conn, 1, "S", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z", None).unwrap();
 
         insert_trade(&conn, sid, "2026-04-24T01:00:00Z", "buy",  3e6, 0.3, 450.0, "buy",  None, None, false).unwrap();
         insert_trade(&conn, sid, "2026-04-24T02:00:00Z", "sell", 3.1e6, 0.3, 465.0, "sell", Some(3.0), Some(3.0), false).unwrap();

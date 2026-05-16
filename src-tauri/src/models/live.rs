@@ -106,6 +106,13 @@ pub struct LiveSession {
     /// before the 0.9995 fee buffer. Sells are always full balance.
     pub max_order_krw: Option<f64>,
     pub created_at: String,
+    /// 이 세션이 실주문을 보낼 Upbit 계정. NULL은 마이그레이션 직전의
+    /// 옛 세션에서만 발생하고, 신규 세션은 백엔드가 NOT NULL을 강제한다.
+    #[serde(default)]
+    pub upbit_account_id: Option<i64>,
+    /// JOIN으로 가져오는 표시용 라벨. NULL이면 "[삭제됨]"으로 UI가 표시.
+    #[serde(default)]
+    pub account_label: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

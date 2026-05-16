@@ -1,13 +1,11 @@
-//! Phase 4A.7 — multi-real=1 invariant + mode-toggle data integrity.
+//! Phase 4A.7 — mode-toggle data integrity + kill-switch tests.
 //!
-//! These tests validate the DB-layer building blocks the
-//! `toggle_session_mode` Tauri command depends on. The command itself wraps
-//! `count_real_sessions(exclude=self) > 0 → reject` + key-presence check,
-//! both of which are simple match arms in the command body — the
-//! invariants are owned by the repo functions tested here.
+//! count_real_sessions has been removed (replaced by per-account partial
+//! unique index in Task 10). Tests that relied on it are replaced with
+//! direct SQL COUNT queries so the invariants remain documented.
 
 use bitcoin_trader_lib::db::live_repo::{
-    count_real_sessions, insert_preset, insert_session, set_session_mode,
+    insert_preset, insert_session, set_session_mode,
     set_session_status, stop_all_real_sessions,
 };
 use rusqlite::Connection;
@@ -23,7 +21,25 @@ fn setup_db() -> Connection {
     conn.execute_batch(include_str!("../migrations/009_baseline_metrics.sql")).unwrap();
     conn.execute_batch(include_str!("../migrations/010_pending_orders.sql")).unwrap();
     conn.execute_batch(include_str!("../migrations/011_safety_limits.sql")).unwrap();
+    conn.execute_batch(include_str!("../migrations/012_order_caps.sql")).unwrap();
+    conn.execute_batch(include_str!("../migrations/013_pending_cost_basis.sql")).unwrap();
+    conn.execute_batch(include_str!("../migrations/014_upbit_accounts.sql")).unwrap();
     conn
+}
+
+fn count_real(conn: &Connection, exclude_id: Option<i64>) -> i64 {
+    match exclude_id {
+        Some(id) => conn.query_row(
+            "SELECT COUNT(*) FROM live_sessions WHERE mode = 'real' AND id != ?1",
+            [id],
+            |r| r.get(0),
+        ).unwrap(),
+        None => conn.query_row(
+            "SELECT COUNT(*) FROM live_sessions WHERE mode = 'real'",
+            [],
+            |r| r.get(0),
+        ).unwrap(),
+    }
 }
 
 fn make_session(conn: &Connection, label: &str) -> i64 {
@@ -31,7 +47,7 @@ fn make_session(conn: &Connection, label: &str) -> i64 {
         conn, 1, &format!("p_{label}"), "V3", "{}", "manual",
         None, None, None, None, None, None, None,
     ).unwrap();
-    insert_session(conn, 1, label, pid, "KRW-ETH", "paper", 1_000_000.0, "2026-04-29T00:00:00Z").unwrap()
+    insert_session(conn, 1, label, pid, "KRW-ETH", "paper", 1_000_000.0, "2026-04-29T00:00:00Z", None).unwrap()
 }
 
 // ─── multi-real=1 invariant ────────────────────────────────────────────────
@@ -41,7 +57,7 @@ fn fresh_db_has_zero_real_sessions() {
     let conn = setup_db();
     let _s1 = make_session(&conn, "A");
     let _s2 = make_session(&conn, "B");
-    assert_eq!(count_real_sessions(&conn, None).unwrap(), 0);
+    assert_eq!(count_real(&conn, None), 0);
 }
 
 #[test]
@@ -49,54 +65,41 @@ fn promoting_first_session_self_exclusion_returns_zero_others() {
     let conn = setup_db();
     let s1 = make_session(&conn, "A");
     set_session_mode(&conn, s1, "real").unwrap();
-    // The command logic: count_real_sessions(exclude=self) — should be 0 → allow.
-    assert_eq!(count_real_sessions(&conn, Some(s1)).unwrap(), 0);
-    assert_eq!(count_real_sessions(&conn, None).unwrap(), 1);
+    assert_eq!(count_real(&conn, Some(s1)), 0);
+    assert_eq!(count_real(&conn, None), 1);
 }
 
 #[test]
 fn second_promotion_is_blocked_via_count() {
-    // Simulates the toggle_session_mode command's check:
-    //   if count_real_sessions(exclude=candidate) > 0 → reject
     let conn = setup_db();
     let s1 = make_session(&conn, "A");
     let s2 = make_session(&conn, "B");
     set_session_mode(&conn, s1, "real").unwrap();
 
-    // candidate = s2; "any OTHER real?" = 1 → block.
-    let other = count_real_sessions(&conn, Some(s2)).unwrap();
+    let other = count_real(&conn, Some(s2));
     assert!(other > 0, "second promotion must be blocked");
 }
 
 #[test]
 fn demoting_releases_the_slot() {
-    // Demote s1 → paper, then s2 should be promotable.
     let conn = setup_db();
     let s1 = make_session(&conn, "A");
     let s2 = make_session(&conn, "B");
     set_session_mode(&conn, s1, "real").unwrap();
-    // demote
     set_session_mode(&conn, s1, "paper").unwrap();
-    // now s2 can promote
-    let other = count_real_sessions(&conn, Some(s2)).unwrap();
+    let other = count_real(&conn, Some(s2));
     assert_eq!(other, 0);
 }
 
 #[test]
 fn stopped_real_sessions_still_count() {
-    // CRITICAL: a 'stopped' real session occupies the slot — its prior
-    // position state is still on Upbit. multi-real=1 must NOT be relaxed
-    // for stopped sessions, otherwise two real sessions could both think
-    // the same coin balance is theirs.
     let conn = setup_db();
     let s1 = make_session(&conn, "A");
     let s2 = make_session(&conn, "B");
     set_session_mode(&conn, s1, "real").unwrap();
     set_session_status(&conn, s1, "running").unwrap();
     set_session_status(&conn, s1, "stopped").unwrap();
-    // s1 is stopped but mode='real'. count_real_sessions doesn't filter on
-    // status — slot still occupied.
-    let other = count_real_sessions(&conn, Some(s2)).unwrap();
+    let other = count_real(&conn, Some(s2));
     assert_eq!(other, 1, "stopped real still occupies the slot");
 }
 
@@ -112,7 +115,6 @@ fn kill_switch_only_targets_running_real() {
     set_session_mode(&conn, s_real_run, "real").unwrap();
     set_session_status(&conn, s_real_run, "running").unwrap();
     set_session_mode(&conn, s_real_stop, "real").unwrap();
-    // s_real_stop stays 'stopped'
 
     let stopped = stop_all_real_sessions(&conn).unwrap();
     assert_eq!(stopped, vec![s_real_run], "only running real should stop");
@@ -120,15 +122,12 @@ fn kill_switch_only_targets_running_real() {
 
 #[test]
 fn kill_switch_preserves_mode() {
-    // Mode='real' must survive emergency stop — the user explicitly chose
-    // it; silent demote would be surprising.
     let conn = setup_db();
     let s = make_session(&conn, "R");
     set_session_mode(&conn, s, "real").unwrap();
     set_session_status(&conn, s, "running").unwrap();
     stop_all_real_sessions(&conn).unwrap();
-    // Mode preserved
-    assert_eq!(count_real_sessions(&conn, None).unwrap(), 1);
+    assert_eq!(count_real(&conn, None), 1);
 }
 
 // ─── Mode toggle data integrity ────────────────────────────────────────────
@@ -141,7 +140,6 @@ fn toggling_does_not_alter_other_session_fields() {
     let before = get_session(&conn, s).unwrap().unwrap();
     set_session_mode(&conn, s, "real").unwrap();
     let after = get_session(&conn, s).unwrap().unwrap();
-    // Only mode changes; everything else preserved.
     assert_eq!(after.mode, "real");
     assert_eq!(before.mode, "paper");
     assert_eq!(before.label, after.label);

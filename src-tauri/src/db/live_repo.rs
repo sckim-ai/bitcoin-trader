@@ -91,6 +91,7 @@ pub fn insert_session(
     mode: &str,
     initial_capital: f64,
     start_ts: &str,
+    upbit_account_id: Option<i64>,
 ) -> Result<i64> {
     // real_started_at = created_at = now. start_ts may be earlier (preset's
     // backtest window start). live_return is the cumulative % from
@@ -100,20 +101,24 @@ pub fn insert_session(
         "INSERT INTO live_sessions
             (user_id, label, preset_id, market, mode, status, initial_capital,
              start_ts, real_started_at, current_position, current_equity,
-             live_return, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, 'stopped', ?6, ?7, ?8, 'idle', ?6, 0.0, ?8)",
-        params![user_id, label, preset_id, market, mode, initial_capital, start_ts, now],
+             live_return, created_at, upbit_account_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'stopped', ?6, ?7, ?8, 'idle', ?6, 0.0, ?8, ?9)",
+        params![user_id, label, preset_id, market, mode, initial_capital, start_ts, now, upbit_account_id],
     )?;
     Ok(conn.last_insert_rowid())
 }
 
 pub fn get_session(conn: &Connection, id: i64) -> Result<Option<LiveSession>> {
     conn.query_row(
-        "SELECT id, user_id, label, preset_id, market, mode, status, initial_capital,
-                start_ts, real_started_at, last_cycle_ts, last_signal,
-                current_position, current_buy_price, current_buy_volume, current_equity,
-                live_return, max_daily_loss_pct, max_daily_trades, max_order_krw, created_at
-         FROM live_sessions WHERE id = ?1",
+        "SELECT ls.id, ls.user_id, ls.label, ls.preset_id, ls.market, ls.mode, ls.status,
+                ls.initial_capital, ls.start_ts, ls.real_started_at, ls.last_cycle_ts,
+                ls.last_signal, ls.current_position, ls.current_buy_price, ls.current_buy_volume,
+                ls.current_equity, ls.live_return, ls.max_daily_loss_pct, ls.max_daily_trades,
+                ls.max_order_krw, ls.created_at,
+                ls.upbit_account_id, ua.label AS account_label
+         FROM live_sessions ls
+         LEFT JOIN upbit_accounts ua ON ua.id = ls.upbit_account_id
+         WHERE ls.id = ?1",
         [id],
         row_to_session,
     )
@@ -122,11 +127,15 @@ pub fn get_session(conn: &Connection, id: i64) -> Result<Option<LiveSession>> {
 
 pub fn list_sessions(conn: &Connection, user_id: i64) -> Result<Vec<LiveSession>> {
     let mut stmt = conn.prepare(
-        "SELECT id, user_id, label, preset_id, market, mode, status, initial_capital,
-                start_ts, real_started_at, last_cycle_ts, last_signal,
-                current_position, current_buy_price, current_buy_volume, current_equity,
-                live_return, max_daily_loss_pct, max_daily_trades, max_order_krw, created_at
-         FROM live_sessions WHERE user_id = ?1 ORDER BY created_at DESC",
+        "SELECT ls.id, ls.user_id, ls.label, ls.preset_id, ls.market, ls.mode, ls.status,
+                ls.initial_capital, ls.start_ts, ls.real_started_at, ls.last_cycle_ts,
+                ls.last_signal, ls.current_position, ls.current_buy_price, ls.current_buy_volume,
+                ls.current_equity, ls.live_return, ls.max_daily_loss_pct, ls.max_daily_trades,
+                ls.max_order_krw, ls.created_at,
+                ls.upbit_account_id, ua.label AS account_label
+         FROM live_sessions ls
+         LEFT JOIN upbit_accounts ua ON ua.id = ls.upbit_account_id
+         WHERE ls.user_id = ?1 ORDER BY ls.created_at DESC",
     )?;
     let rows = stmt.query_map([user_id], row_to_session)?;
     rows.collect()
@@ -134,11 +143,15 @@ pub fn list_sessions(conn: &Connection, user_id: i64) -> Result<Vec<LiveSession>
 
 pub fn list_running_sessions(conn: &Connection) -> Result<Vec<LiveSession>> {
     let mut stmt = conn.prepare(
-        "SELECT id, user_id, label, preset_id, market, mode, status, initial_capital,
-                start_ts, real_started_at, last_cycle_ts, last_signal,
-                current_position, current_buy_price, current_buy_volume, current_equity,
-                live_return, max_daily_loss_pct, max_daily_trades, max_order_krw, created_at
-         FROM live_sessions WHERE status = 'running'",
+        "SELECT ls.id, ls.user_id, ls.label, ls.preset_id, ls.market, ls.mode, ls.status,
+                ls.initial_capital, ls.start_ts, ls.real_started_at, ls.last_cycle_ts,
+                ls.last_signal, ls.current_position, ls.current_buy_price, ls.current_buy_volume,
+                ls.current_equity, ls.live_return, ls.max_daily_loss_pct, ls.max_daily_trades,
+                ls.max_order_krw, ls.created_at,
+                ls.upbit_account_id, ua.label AS account_label
+         FROM live_sessions ls
+         LEFT JOIN upbit_accounts ua ON ua.id = ls.upbit_account_id
+         WHERE ls.status = 'running'",
     )?;
     let rows = stmt.query_map([], row_to_session)?;
     rows.collect()
@@ -166,25 +179,6 @@ pub fn set_session_max_order_krw(conn: &Connection, id: i64, cap: Option<f64>) -
         "UPDATE live_sessions SET max_order_krw = ?1 WHERE id = ?2",
         params![cap, id],
     )
-}
-
-/// Count sessions currently in real mode, regardless of running/stopped status.
-/// Used to enforce the multi-real=1 invariant: even a stopped real session
-/// occupies the "slot" since its prior position/balance state is on Upbit.
-pub fn count_real_sessions(conn: &Connection, exclude_id: Option<i64>) -> Result<i64> {
-    let n: i64 = match exclude_id {
-        Some(id) => conn.query_row(
-            "SELECT COUNT(*) FROM live_sessions WHERE mode = 'real' AND id != ?1",
-            [id],
-            |r| r.get(0),
-        )?,
-        None => conn.query_row(
-            "SELECT COUNT(*) FROM live_sessions WHERE mode = 'real'",
-            [],
-            |r| r.get(0),
-        )?,
-    };
-    Ok(n)
 }
 
 /// Stop every running real session. Returns the affected ids so the caller
@@ -299,6 +293,8 @@ fn row_to_session(row: &rusqlite::Row) -> Result<LiveSession> {
         max_daily_trades: row.get(18)?,
         max_order_krw: row.get(19)?,
         created_at: row.get(20)?,
+        upbit_account_id: row.get(21)?,
+        account_label: row.get(22)?,
     })
 }
 
@@ -547,22 +543,17 @@ mod tests {
     fn setup_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
-        let s1 = include_str!("../../migrations/001_initial.sql");
-        conn.execute_batch(s1).unwrap();
-        let s2 = include_str!("../../migrations/002_users.sql");
-        conn.execute_batch(s2).unwrap();
-        let s6 = include_str!("../../migrations/006_live_trading.sql");
-        conn.execute_batch(s6).unwrap();
-        let s7 = include_str!("../../migrations/007_preset_context.sql");
-        conn.execute_batch(s7).unwrap();
-        let s8 = include_str!("../../migrations/008_session_signal_log.sql");
-        conn.execute_batch(s8).unwrap();
-        let s9 = include_str!("../../migrations/009_baseline_metrics.sql");
-        conn.execute_batch(s9).unwrap();
-        let s10 = include_str!("../../migrations/010_pending_orders.sql");
-        conn.execute_batch(s10).unwrap();
-        let s11 = include_str!("../../migrations/011_safety_limits.sql");
-        conn.execute_batch(s11).unwrap();
+        conn.execute_batch(include_str!("../../migrations/001_initial.sql")).unwrap();
+        conn.execute_batch(include_str!("../../migrations/002_users.sql")).unwrap();
+        conn.execute_batch(include_str!("../../migrations/006_live_trading.sql")).unwrap();
+        conn.execute_batch(include_str!("../../migrations/007_preset_context.sql")).unwrap();
+        conn.execute_batch(include_str!("../../migrations/008_session_signal_log.sql")).unwrap();
+        conn.execute_batch(include_str!("../../migrations/009_baseline_metrics.sql")).unwrap();
+        conn.execute_batch(include_str!("../../migrations/010_pending_orders.sql")).unwrap();
+        conn.execute_batch(include_str!("../../migrations/011_safety_limits.sql")).unwrap();
+        conn.execute_batch(include_str!("../../migrations/012_order_caps.sql")).unwrap();
+        conn.execute_batch(include_str!("../../migrations/013_pending_cost_basis.sql")).unwrap();
+        conn.execute_batch(include_str!("../../migrations/014_upbit_accounts.sql")).unwrap();
         conn
     }
 
@@ -612,7 +603,7 @@ mod tests {
     fn test_session_insert_and_defaults() {
         let conn = setup_db();
         let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None, None, None).unwrap();
-        let sid = insert_session(&conn, 1, "S1", pid, "KRW-ETH", "paper", 1_000_000.0, "2026-04-24T00:00:00Z").unwrap();
+        let sid = insert_session(&conn, 1, "S1", pid, "KRW-ETH", "paper", 1_000_000.0, "2026-04-24T00:00:00Z", None).unwrap();
         let s = get_session(&conn, sid).unwrap().expect("session exists");
         assert_eq!(s.label, "S1");
         assert_eq!(s.status, "stopped");
@@ -625,7 +616,7 @@ mod tests {
     fn test_session_status_transitions() {
         let conn = setup_db();
         let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None, None, None).unwrap();
-        let sid = insert_session(&conn, 1, "S1", pid, "KRW-ETH", "paper", 1_000_000.0, "2026-04-24T00:00:00Z").unwrap();
+        let sid = insert_session(&conn, 1, "S1", pid, "KRW-ETH", "paper", 1_000_000.0, "2026-04-24T00:00:00Z", None).unwrap();
 
         assert_eq!(list_running_sessions(&conn).unwrap().len(), 0);
         set_session_status(&conn, sid, "running").unwrap();
@@ -636,32 +627,45 @@ mod tests {
 
     #[test]
     fn test_set_session_mode_and_count() {
+        // count_real_sessions removed; replicate with inline SQL.
+        let count_real = |c: &Connection, exclude: Option<i64>| -> i64 {
+            match exclude {
+                Some(id) => c.query_row(
+                    "SELECT COUNT(*) FROM live_sessions WHERE mode = 'real' AND id != ?1",
+                    [id], |r| r.get(0),
+                ).unwrap(),
+                None => c.query_row(
+                    "SELECT COUNT(*) FROM live_sessions WHERE mode = 'real'",
+                    [], |r| r.get(0),
+                ).unwrap(),
+            }
+        };
+
         let conn = setup_db();
         let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None, None, None).unwrap();
-        let s1 = insert_session(&conn, 1, "A", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z").unwrap();
-        let s2 = insert_session(&conn, 1, "B", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z").unwrap();
+        let s1 = insert_session(&conn, 1, "A", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z", None).unwrap();
+        let s2 = insert_session(&conn, 1, "B", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z", None).unwrap();
 
-        assert_eq!(count_real_sessions(&conn, None).unwrap(), 0);
+        assert_eq!(count_real(&conn, None), 0);
 
         set_session_mode(&conn, s1, "real").unwrap();
-        assert_eq!(count_real_sessions(&conn, None).unwrap(), 1);
-        // Excluding s1 from the count = "any OTHER real session?"
-        assert_eq!(count_real_sessions(&conn, Some(s1)).unwrap(), 0);
+        assert_eq!(count_real(&conn, None), 1);
+        assert_eq!(count_real(&conn, Some(s1)), 0);
 
         set_session_mode(&conn, s2, "real").unwrap();
-        assert_eq!(count_real_sessions(&conn, None).unwrap(), 2);
-        assert_eq!(count_real_sessions(&conn, Some(s1)).unwrap(), 1);
+        assert_eq!(count_real(&conn, None), 2);
+        assert_eq!(count_real(&conn, Some(s1)), 1);
     }
 
     #[test]
     fn test_stop_all_real_sessions() {
         let conn = setup_db();
         let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None, None, None).unwrap();
-        let s1 = insert_session(&conn, 1, "A", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z").unwrap();
-        let s2 = insert_session(&conn, 1, "B", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z").unwrap();
+        let s1 = insert_session(&conn, 1, "A", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z", None).unwrap();
+        let s2 = insert_session(&conn, 1, "B", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z", None).unwrap();
 
         // s1 = running real, s2 = running paper, s3 = stopped real
-        let s3 = insert_session(&conn, 1, "C", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z").unwrap();
+        let s3 = insert_session(&conn, 1, "C", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z", None).unwrap();
         set_session_mode(&conn, s1, "real").unwrap();
         set_session_status(&conn, s1, "running").unwrap();
         set_session_status(&conn, s2, "running").unwrap();
@@ -680,7 +684,7 @@ mod tests {
     fn test_session_cycle_update() {
         let conn = setup_db();
         let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None, None, None).unwrap();
-        let sid = insert_session(&conn, 1, "S1", pid, "KRW-ETH", "paper", 1_000_000.0, "2026-04-24T00:00:00Z").unwrap();
+        let sid = insert_session(&conn, 1, "S1", pid, "KRW-ETH", "paper", 1_000_000.0, "2026-04-24T00:00:00Z", None).unwrap();
 
         update_session_cycle(&conn, sid, "2026-04-24T05:00:00Z", "buy", "holding",
             Some(3_200_000.0), Some(0.312), 1_100_000.0, 0.0).unwrap();
@@ -698,7 +702,7 @@ mod tests {
     fn test_trade_insert_and_list() {
         let conn = setup_db();
         let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None, None, None).unwrap();
-        let sid = insert_session(&conn, 1, "S", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z").unwrap();
+        let sid = insert_session(&conn, 1, "S", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z", None).unwrap();
 
         insert_trade(&conn, sid, "2026-04-24T01:00:00Z", "buy", 3_000_000.0, 0.3, 450.0, "buy", None, None, false).unwrap();
         insert_trade(&conn, sid, "2026-04-24T03:00:00Z", "sell", 3_100_000.0, 0.3, 465.0, "sell", Some(30_000.0), Some(3.3), false).unwrap();
@@ -714,7 +718,7 @@ mod tests {
     fn test_count_completed_trades() {
         let conn = setup_db();
         let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None, None, None).unwrap();
-        let sid = insert_session(&conn, 1, "S", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z").unwrap();
+        let sid = insert_session(&conn, 1, "S", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z", None).unwrap();
 
         assert_eq!(count_completed_trades(&conn, sid).unwrap(), 0);
         insert_trade(&conn, sid, "2026-04-24T01:00:00Z", "buy", 3e6, 0.3, 450.0, "buy", None, None, false).unwrap();
@@ -727,7 +731,7 @@ mod tests {
     fn test_equity_upsert() {
         let conn = setup_db();
         let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None, None, None).unwrap();
-        let sid = insert_session(&conn, 1, "S", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z").unwrap();
+        let sid = insert_session(&conn, 1, "S", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z", None).unwrap();
 
         upsert_equity(&conn, sid, "2026-04-24T01:00:00Z", 1_000_000.0, "idle").unwrap();
         upsert_equity(&conn, sid, "2026-04-24T01:00:00Z", 1_050_000.0, "holding").unwrap();
@@ -743,7 +747,7 @@ mod tests {
     fn test_delete_session_cascades() {
         let conn = setup_db();
         let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None, None, None).unwrap();
-        let sid = insert_session(&conn, 1, "S", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z").unwrap();
+        let sid = insert_session(&conn, 1, "S", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z", None).unwrap();
         insert_trade(&conn, sid, "2026-04-24T01:00:00Z", "buy", 3e6, 0.3, 450.0, "buy", None, None, false).unwrap();
         upsert_equity(&conn, sid, "2026-04-24T01:00:00Z", 1e6, "idle").unwrap();
 

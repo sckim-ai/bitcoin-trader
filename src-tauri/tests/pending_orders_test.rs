@@ -21,6 +21,7 @@ fn setup_db() -> Connection {
     conn.execute_batch(include_str!("../migrations/010_pending_orders.sql")).unwrap();
     conn.execute_batch(include_str!("../migrations/011_safety_limits.sql")).unwrap();
     conn.execute_batch(include_str!("../migrations/013_pending_cost_basis.sql")).unwrap();
+    conn.execute_batch(include_str!("../migrations/014_upbit_accounts.sql")).unwrap();
     conn
 }
 
@@ -29,7 +30,7 @@ fn make_session(conn: &Connection) -> i64 {
         conn, 1, "p", "V3", "{}", "manual",
         None, None, None, None, None, None, None,
     ).unwrap();
-    insert_session(conn, 1, "S", pid, "KRW-ETH", "real", 1e6, "2026-04-29T00:00:00Z").unwrap()
+    insert_session(conn, 1, "S", pid, "KRW-ETH", "real", 1e6, "2026-04-29T00:00:00Z", None).unwrap()
 }
 
 #[test]

@@ -143,6 +143,7 @@ pub fn create_session(
         "paper",
         args.initial_capital,
         &start_ts,
+        None, // upbit_account_id — Task 10 will thread through from args
     )
     .map_err(|e| e.to_string())?;
 
@@ -254,14 +255,11 @@ pub fn delete_session(id: i64, state: State<'_, AppState>) -> Result<(), String>
 
 // ─── Mode toggle (paper ↔ real) — Phase 4A.2 ───
 //
-// Multi-real=1 invariant: at most one session may have mode='real' at any
-// time. This protects the user from concurrent real sessions racing for the
-// same Upbit balance. The check uses `count_real_sessions(exclude=self)` so
-// flipping a session that's already 'real' to 'paper' (and back) is allowed.
-//
 // API key check on promotion: a real session is useless without keys, and
 // silent failure on first cycle is the worst UX. We surface the missing-key
 // case at the toggle moment with a clear message pointing to Settings.
+// Note: multi-real=1 invariant is enforced by the per-account partial unique
+// index (Task 10). count_real_sessions has been removed.
 
 #[derive(serde::Deserialize)]
 pub struct ToggleSessionModeArgs {
@@ -291,18 +289,6 @@ pub fn toggle_session_mode(
     }
 
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-
-    if mode == "real" {
-        let other_real = live_repo::count_real_sessions(&conn, Some(args.id))
-            .map_err(|e| e.to_string())?;
-        if other_real > 0 {
-            return Err(format!(
-                "Multi-real not allowed: {other_real} other session(s) already in real mode. \
-                 Demote one to paper first."
-            ));
-        }
-    }
-
     live_repo::set_session_mode(&conn, args.id, mode).map_err(|e| e.to_string())?;
     Ok(())
 }

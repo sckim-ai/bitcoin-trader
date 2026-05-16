@@ -27,6 +27,8 @@ fn setup_db() -> Connection {
         include_str!("../migrations/010_pending_orders.sql"),
         include_str!("../migrations/011_safety_limits.sql"),
         include_str!("../migrations/012_order_caps.sql"),
+        include_str!("../migrations/013_pending_cost_basis.sql"),
+        include_str!("../migrations/014_upbit_accounts.sql"),
     ] {
         conn.execute_batch(sql).unwrap();
     }
@@ -41,7 +43,7 @@ fn make_preset_and_session(conn: &Connection) -> i64 {
     .unwrap();
     live_repo::insert_session(
         conn, 1, "S", pid, "KRW-ETH", "paper", 1_000_000.0,
-        "2026-04-24T00:00:00Z",
+        "2026-04-24T00:00:00Z", None,
     )
     .unwrap()
 }

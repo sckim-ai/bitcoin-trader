@@ -105,6 +105,9 @@ fn setup_db() -> Connection {
     conn.execute_batch(include_str!("../migrations/009_baseline_metrics.sql")).unwrap();
     conn.execute_batch(include_str!("../migrations/010_pending_orders.sql")).unwrap();
     conn.execute_batch(include_str!("../migrations/011_safety_limits.sql")).unwrap();
+    conn.execute_batch(include_str!("../migrations/012_order_caps.sql")).unwrap();
+    conn.execute_batch(include_str!("../migrations/013_pending_cost_basis.sql")).unwrap();
+    conn.execute_batch(include_str!("../migrations/014_upbit_accounts.sql")).unwrap();
     conn
 }
 
@@ -122,11 +125,11 @@ fn two_sessions_same_label_each_keep_their_own_identical_sell_row() {
     // (NewSessionDialog defaults `label = preset.name` until the user types.)
     let s1 = live_repo::insert_session(
         &conn, 1, "Short_156", preset_id, "KRW-ETH", "paper",
-        1_000_000.0, "2026-04-24T00:00:00Z",
+        1_000_000.0, "2026-04-24T00:00:00Z", None,
     ).unwrap();
     let s2 = live_repo::insert_session(
         &conn, 1, "Short_156", preset_id, "KRW-ETH", "paper",
-        1_000_000.0, "2026-04-24T00:00:00Z",
+        1_000_000.0, "2026-04-24T00:00:00Z", None,
     ).unwrap();
     assert_ne!(s1, s2, "sessions must have distinct ids");
 

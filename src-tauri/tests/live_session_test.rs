@@ -16,6 +16,9 @@ fn setup_db() -> Connection {
     conn.execute_batch(include_str!("../migrations/009_baseline_metrics.sql")).unwrap();
     conn.execute_batch(include_str!("../migrations/010_pending_orders.sql")).unwrap();
     conn.execute_batch(include_str!("../migrations/011_safety_limits.sql")).unwrap();
+    conn.execute_batch(include_str!("../migrations/012_order_caps.sql")).unwrap();
+    conn.execute_batch(include_str!("../migrations/013_pending_cost_basis.sql")).unwrap();
+    conn.execute_batch(include_str!("../migrations/014_upbit_accounts.sql")).unwrap();
     conn
 }
 
@@ -27,9 +30,9 @@ fn full_session_lifecycle() {
     let pid = live_repo::insert_preset(&conn, 1, "V3-OptA", "V3", "{}", "manual", None, None, None, None, None, None, None).unwrap();
 
     // 2) 세션 3개 생성
-    let s1 = live_repo::insert_session(&conn, 1, "S1", pid, "KRW-ETH", "paper", 1_000_000.0, "2026-04-24T00:00:00Z").unwrap();
-    let s2 = live_repo::insert_session(&conn, 1, "S2", pid, "KRW-ETH", "paper", 1_000_000.0, "2026-04-24T00:00:00Z").unwrap();
-    let s3 = live_repo::insert_session(&conn, 1, "S3", pid, "KRW-ETH", "paper", 1_000_000.0, "2026-04-24T00:00:00Z").unwrap();
+    let s1 = live_repo::insert_session(&conn, 1, "S1", pid, "KRW-ETH", "paper", 1_000_000.0, "2026-04-24T00:00:00Z", None).unwrap();
+    let s2 = live_repo::insert_session(&conn, 1, "S2", pid, "KRW-ETH", "paper", 1_000_000.0, "2026-04-24T00:00:00Z", None).unwrap();
+    let s3 = live_repo::insert_session(&conn, 1, "S3", pid, "KRW-ETH", "paper", 1_000_000.0, "2026-04-24T00:00:00Z", None).unwrap();
 
     // 3) 각각 running으로 전환
     for sid in [s1, s2, s3] {
@@ -74,7 +77,7 @@ fn replace_paper_trades_preserves_real() {
     // — they represent actual Upbit fills and survive across cycles.
     let conn = setup_db();
     let pid = live_repo::insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None, None, None).unwrap();
-    let sid = live_repo::insert_session(&conn, 1, "S", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z").unwrap();
+    let sid = live_repo::insert_session(&conn, 1, "S", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z", None).unwrap();
 
     // Three rows: paper buy, paper sell, real buy.
     live_repo::insert_trade(&conn, sid, "2026-04-24T01:00:00Z", "buy",  3e6,   0.3, 450.0, "buy",  None, None, false).unwrap();
