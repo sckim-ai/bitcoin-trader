@@ -165,11 +165,29 @@ pub fn set_session_status(conn: &Connection, id: i64, status: &str) -> Result<us
 }
 
 /// Switch a session between paper and real modes. Caller is responsible for
-/// validating multi-real=1 and that API keys are configured before promoting.
+/// validating that API keys are configured before promoting. For real
+/// promotion with an explicit account, prefer `set_session_mode_real` which
+/// updates mode + account_id atomically.
 pub fn set_session_mode(conn: &Connection, id: i64, mode: &str) -> Result<usize> {
     conn.execute(
         "UPDATE live_sessions SET mode = ?1 WHERE id = ?2",
         params![mode, id],
+    )
+}
+
+/// Promote a session to real mode AND bind it to a specific Upbit account in
+/// a single UPDATE. The partial unique index
+/// `idx_session_account_running_real` rejects a second running real session
+/// on the same account at the DB level — callers should catch UNIQUE
+/// violation and surface a friendly message.
+pub fn set_session_mode_real(
+    conn: &Connection,
+    id: i64,
+    account_id: i64,
+) -> Result<usize> {
+    conn.execute(
+        "UPDATE live_sessions SET mode = 'real', upbit_account_id = ?1 WHERE id = ?2",
+        params![account_id, id],
     )
 }
 

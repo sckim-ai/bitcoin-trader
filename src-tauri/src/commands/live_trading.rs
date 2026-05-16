@@ -98,11 +98,6 @@ pub struct CreateSessionArgs {
     /// Optional per-session BUY cap in KRW. None / omitted → use full balance.
     #[serde(default)]
     pub max_order_krw: Option<f64>,
-    /// 이 세션이 실주문을 보낼 Upbit 계정. 신규 세션은 필수 (Some 강제).
-    /// Option으로 두는 이유는 serde가 누락된 필드를 None으로 받게 해서
-    /// 백엔드 한 곳에서 명시적 에러를 던지기 위함.
-    #[serde(default)]
-    pub upbit_account_id: Option<i64>,
 }
 
 /// Normalize a preset's since_ts ("YYYY-MM-DD" or RFC3339) to an RFC3339
@@ -125,20 +120,9 @@ pub fn create_session(
     args: CreateSessionArgs,
     state: State<'_, AppState>,
 ) -> Result<i64, String> {
+    // 세션 생성은 계정과 무관하게 자유롭게. 항상 paper로 시작.
+    // 계정 연결은 paper → real 승급(toggle_session_mode) 시점에만 강제된다.
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-
-    let account_id = args.upbit_account_id
-        .ok_or_else(|| "Upbit 계정을 선택하세요. (Accounts 페이지에서 먼저 등록)".to_string())?;
-    let acc = crate::db::upbit_accounts_repo::get_account(&conn, account_id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("계정 {account_id}이 존재하지 않습니다."))?;
-    if !acc.enabled {
-        return Err("선택한 계정이 비활성화 상태입니다.".into());
-    }
-    let (has_a, has_s) = crate::commands::upbit_keys::has_keys_for(account_id);
-    if !has_a || !has_s {
-        return Err("선택한 계정에 API 키가 설정되지 않았습니다.".into());
-    }
 
     let preset = live_repo::get_preset(&conn, args.preset_id)
         .map_err(|e| e.to_string())?
@@ -161,7 +145,7 @@ pub fn create_session(
         "paper",
         args.initial_capital,
         &start_ts,
-        Some(account_id),
+        None,
     )
     .map_err(|e| e.to_string())?;
 
@@ -283,6 +267,10 @@ pub fn delete_session(id: i64, state: State<'_, AppState>) -> Result<(), String>
 pub struct ToggleSessionModeArgs {
     pub id: i64,
     pub mode: String, // "paper" or "real"
+    /// real 승급 시 계정 지정. None이면 세션에 이미 연결된 계정을 사용한다.
+    /// paper로 되돌릴 때는 무시 (기존 계정 연결을 보존).
+    #[serde(default)]
+    pub upbit_account_id: Option<i64>,
 }
 
 #[tauri::command]
@@ -298,17 +286,17 @@ pub fn toggle_session_mode(
     let conn = state.db.lock().map_err(|e| e.to_string())?;
 
     if mode == "real" {
-        // Account-based validation: verify the session's linked account exists,
-        // is enabled, and has API keys loaded.
+        // real 승급 경로: 계정을 새로 받았거나 세션에 이미 연결된 계정을 사용한다.
         let session = live_repo::get_session(&conn, args.id)
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("session {} not found", args.id))?;
-        let account_id = session
+        let account_id = args
             .upbit_account_id
-            .ok_or_else(|| "이 세션에는 Upbit 계정이 연결되어 있지 않습니다.".to_string())?;
+            .or(session.upbit_account_id)
+            .ok_or_else(|| "Upbit 계정을 선택하세요.".to_string())?;
         let acc = crate::db::upbit_accounts_repo::get_account(&conn, account_id)
             .map_err(|e| e.to_string())?
-            .ok_or_else(|| "계정이 삭제되었습니다.".to_string())?;
+            .ok_or_else(|| "계정이 삭제되었거나 존재하지 않습니다.".to_string())?;
         if !acc.enabled {
             return Err("계정이 비활성화 상태입니다.".into());
         }
@@ -316,10 +304,23 @@ pub fn toggle_session_mode(
         if !ha || !hs {
             return Err("계정 API 키가 설정되지 않았습니다.".into());
         }
-        // 부분 유니크 인덱스가 같은 계정 두 번째 running real을 DB 레벨에서 차단.
+        // mode + upbit_account_id를 한 UPDATE로 원자적으로 적용.
+        // 부분 유니크 인덱스(idx_session_account_running_real)가 같은 계정의
+        // 두 번째 running real을 차단하므로 SQLite UNIQUE 위반을
+        // 친절한 한글 메시지로 변환한다.
+        live_repo::set_session_mode_real(&conn, args.id, account_id)
+            .map_err(|e| {
+                let s = e.to_string().to_lowercase();
+                if s.contains("unique") || s.contains("constraint") {
+                    format!("계정 [{}]에 이미 실행 중인 real 세션이 있습니다.", acc.label)
+                } else {
+                    e.to_string()
+                }
+            })?;
+    } else {
+        // paper로 되돌리기: 계정 연결은 보존, mode만 변경.
+        live_repo::set_session_mode(&conn, args.id, mode).map_err(|e| e.to_string())?;
     }
-
-    live_repo::set_session_mode(&conn, args.id, mode).map_err(|e| e.to_string())?;
     Ok(())
 }
 

@@ -420,8 +420,8 @@ export default function LiveTradingPage() {
         <PromoteRealDialog
           session={promoteTarget}
           onClose={() => setPromoteTarget(null)}
-          onConfirm={async () => {
-            await toggleSessionMode(promoteTarget.id, "real");
+          onConfirm={async (accountId) => {
+            await toggleSessionMode(promoteTarget.id, "real", accountId);
           }}
         />
       )}

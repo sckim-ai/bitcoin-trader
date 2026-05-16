@@ -40,10 +40,18 @@ export const stopSession = (id: number): Promise<void> =>
   invoke("stop_session", { id });
 export const deleteSession = (id: number): Promise<void> =>
   invoke("delete_session", { id });
-/// Promote a paper session to real (or demote back to paper). Backend enforces
-/// multi-real=1 and verifies API keys are configured before promoting.
-export const toggleSessionMode = (id: number, mode: "paper" | "real"): Promise<void> =>
-  invoke("toggle_session_mode", { args: { id, mode } });
+/// Promote a paper session to real (or demote back to paper).
+///   - real 승급: `upbitAccountId` 인자 또는 세션에 이미 연결된 계정 중 하나가 필수.
+///     백엔드가 partial unique index로 계정당 1 running real을 강제.
+///   - paper 복귀: 계정 인자 무시되며, 세션의 기존 계정 연결은 보존된다.
+export const toggleSessionMode = (
+  id: number,
+  mode: "paper" | "real",
+  upbitAccountId?: number,
+): Promise<void> =>
+  invoke("toggle_session_mode", {
+    args: { id, mode, upbit_account_id: upbitAccountId ?? null },
+  });
 /// Stop all running real sessions. Returns the affected session ids.
 /// Mode stays 'real' — only status flips to 'stopped'.
 export const emergencyStopAllReal = (): Promise<number[]> =>

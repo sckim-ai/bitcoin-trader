@@ -1,36 +1,64 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "../ui/Button";
 import { AlertTriangle } from "lucide-react";
-import type { LiveSession } from "../../types";
+import type { LiveSession, UpbitAccount } from "../../types";
+import { listUpbitAccounts } from "../../lib/live";
 
 interface Props {
   session: LiveSession;
   onClose: () => void;
-  onConfirm: () => Promise<void>;
+  /** Receives the selected account id so the caller can call toggleSessionMode(id, 'real', accountId). */
+  onConfirm: (accountId: number) => Promise<void>;
 }
 
 /**
- * Hard-confirm dialog for paper → real promotion. Shown because real mode
- * places actual Upbit orders against the user's account; we want a deliberate
- * checkbox + button click rather than a single misclick.
+ * Hard-confirm dialog for paper → real promotion.
+ *
+ * Required step: pick the Upbit account. The backend's partial unique index
+ * (idx_session_account_running_real) rejects a second running real session on
+ * the same account, so accounts with an existing running real are visible but
+ * disabled. If this session was previously real on some account, that account
+ * is the default selection (preserved across paper↔real toggling).
  */
 export default function PromoteRealDialog({ session, onClose, onConfirm }: Props) {
+  const [accounts, setAccounts] = useState<UpbitAccount[]>([]);
+  const [accountId, setAccountId] = useState<number | null>(
+    session.upbit_account_id ?? null,
+  );
+  const [loadingAccounts, setLoadingAccounts] = useState(true);
   const [acknowledged, setAcknowledged] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    listUpbitAccounts()
+      .then((list) => {
+        setAccounts(list);
+        // 세션에 이미 연결된 계정이 없으면, 선택 가능한 계정이 1개일 때 자동 선택.
+        if (accountId == null) {
+          const selectable = list.filter((a) => a.enabled && !a.has_running_session);
+          if (selectable.length === 1) setAccountId(selectable[0].id);
+        }
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setLoadingAccounts(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleConfirm = async () => {
-    if (!acknowledged) return;
+    if (!acknowledged || accountId == null) return;
     setSubmitting(true);
     setError(null);
     try {
-      await onConfirm();
+      await onConfirm(accountId);
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setSubmitting(false);
     }
   };
+
+  const previousAccountId = session.upbit_account_id;
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
@@ -52,6 +80,46 @@ export default function PromoteRealDialog({ session, onClose, onConfirm }: Props
           </p>
         </div>
 
+        <div>
+          <label className="text-xs text-zinc-500 block mb-1">
+            Upbit Account <span className="text-rose-400">*</span>
+          </label>
+          {loadingAccounts ? (
+            <p className="text-xs text-zinc-500">계정 로딩 중...</p>
+          ) : accounts.length === 0 ? (
+            <p className="text-xs text-amber-400">
+              등록된 계정이 없습니다. Accounts 페이지에서 먼저 등록하세요.
+            </p>
+          ) : (
+            <>
+              <select
+                value={accountId ?? ""}
+                onChange={(e) => setAccountId(e.target.value === "" ? null : Number(e.target.value))}
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200"
+              >
+                <option value="">— 계정 선택 —</option>
+                {accounts.map((a) => {
+                  // 이 세션 자신이 이미 그 계정에 묶여 있다면 disable하지 않음.
+                  const selfOnAccount = a.id === previousAccountId;
+                  const blockedByOther = a.has_running_session && !selfOnAccount;
+                  const unavailable = !a.enabled || blockedByOther;
+                  return (
+                    <option key={a.id} value={a.id} disabled={unavailable}>
+                      {a.label}
+                      {!a.enabled ? " (비활성)" : blockedByOther ? " (다른 real 실행 중)" : ""}
+                    </option>
+                  );
+                })}
+              </select>
+              {previousAccountId != null && (
+                <p className="text-[10px] text-zinc-500 mt-1">
+                  이전에 연결된 계정이 기본 선택됩니다.
+                </p>
+              )}
+            </>
+          )}
+        </div>
+
         <div className="bg-zinc-800/50 border border-zinc-700 rounded-lg p-3 text-xs text-zinc-400 space-y-1">
           <div><span className="text-zinc-500">Market:</span> <span className="text-zinc-200">{session.market}</span></div>
           <div><span className="text-zinc-500">Initial capital:</span> <span className="text-zinc-200">{session.initial_capital.toLocaleString()} KRW</span></div>
@@ -70,7 +138,7 @@ export default function PromoteRealDialog({ session, onClose, onConfirm }: Props
             ⚠ 첫 운용 권장: <span className="font-medium">매우 작은 자본(예: 50,000원)</span>으로 paper 결과와 비교 검증.
           </p>
           <p className="text-zinc-500">
-            실거래 세션은 동시에 1개만 운용 가능 (multi-real 제한). 다른 real 세션이 있으면 거부됩니다.
+            동일 계정에서는 실거래 세션 1개만 동시 운용 가능합니다. (계정별 부분 유니크 인덱스로 강제)
           </p>
         </div>
 
@@ -90,7 +158,7 @@ export default function PromoteRealDialog({ session, onClose, onConfirm }: Props
           <Button variant="secondary" onClick={onClose} disabled={submitting}>Cancel</Button>
           <Button
             variant="danger"
-            disabled={!acknowledged || submitting}
+            disabled={!acknowledged || submitting || accountId == null}
             onClick={handleConfirm}
           >
             {submitting ? "Promoting..." : "Promote to Real"}

@@ -48,7 +48,7 @@ interface LiveTradingState {
   deletePreset: (id: number) => Promise<void>;
   /// Promote (paper → real) or demote (real → paper). Backend enforces
   /// multi-real=1 and API key presence; errors propagate to the caller.
-  toggleSessionMode: (id: number, mode: "paper" | "real") => Promise<void>;
+  toggleSessionMode: (id: number, mode: "paper" | "real", upbitAccountId?: number) => Promise<void>;
   /// Stop all running real sessions. Returns affected ids for the caller
   /// to surface in a toast.
   emergencyStopAllReal: () => Promise<number[]>;
@@ -79,12 +79,12 @@ export const useLiveTradingStore = create<LiveTradingState>((set, get) => ({
       // — we still render whatever's already in the local DB.
       try { await autoUpdateAllMarkets(); } catch { /* offline-safe */ }
       const data = await getMarketData("ETH", "hour");
-      // Trim to the last 90 days. The DB may carry legacy history (e.g.
-      // CSV-imported 2019–2020 candles) that's irrelevant for the live chart
-      // and would otherwise stretch the auto-fit range away from "now".
-      const cutoffMs = Date.now() - 90 * 24 * 60 * 60 * 1000;
-      const recent = data.filter((m) => new Date(m.candle.timestamp).getTime() >= cutoffMs);
-      set({ marketData: recent });
+      // No store-side trimming. The page's `rangeStart` is the single source of
+      // truth for the visible window — LiveTradingPage filters by `cutoffMs`
+      // and CandleChart re-fits timeScale when that window changes. Letting
+      // legacy candles through here means the user can extend `From` further
+      // back than 90 days and actually see those bars.
+      set({ marketData: data });
     } finally {
       set({ loadingMarketData: false });
     }
@@ -183,8 +183,8 @@ export const useLiveTradingStore = create<LiveTradingState>((set, get) => ({
     await get().refreshPresets();
   },
 
-  toggleSessionMode: async (id, mode) => {
-    await apiToggleMode(id, mode);
+  toggleSessionMode: async (id, mode, upbitAccountId) => {
+    await apiToggleMode(id, mode, upbitAccountId);
     await get().refreshSessions();
   },
 

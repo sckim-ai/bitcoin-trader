@@ -256,7 +256,6 @@ export interface CreateSessionArgs {
   initial_capital: number;
   /** Optional per-session BUY cap in KRW. Null/omitted = no cap. */
   max_order_krw?: number | null;
-  upbit_account_id?: number | null;
 }
 
 export interface SessionCycleOutput {
