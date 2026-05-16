@@ -23,7 +23,6 @@ interface Props {
 /// disables itself (Upbit balance has no session to attribute to).
 export default function ManualOrderCard({ sessions, onPlaced }: Props) {
   const realSessions = sessions.filter((s) => s.mode === "real");
-  const hasReal = realSessions.length > 0;
 
   // 1개면 자동 선택, 2개 이상이면 사용자가 직접 선택
   const [selectedSessionId, setSelectedSessionId] = useState<number | null>(
