@@ -11,6 +11,7 @@
 
 use crate::api::upbit::UpbitClient;
 use crate::db::live_repo;
+use crate::db::live_repo::PendingOrder;
 use chrono::{DateTime, Duration, Timelike, Utc};
 use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
@@ -37,22 +38,14 @@ pub fn trigger_bar_ts(placed_at: &str) -> Option<String> {
 /// 1 hour — a stale `wait` order beyond this is auto-cancelled.
 pub const STALE_AFTER: Duration = Duration::hours(1);
 
-/// Drive one reconcile pass: scan pending_orders.status='wait', call
-/// get_order for each, and either mark resolved (done/cancel) or attempt
-/// timeout cancellation. Errors on individual orders are logged and skipped
-/// — one bad uuid shouldn't prevent the rest from being checked.
-pub async fn reconcile_pending_orders(
+/// Internal reconcile loop. Processes a pre-fetched list of pending orders
+/// using the given UpbitClient. One bad uuid is logged and skipped — it
+/// never aborts the whole pass.
+async fn reconcile_inner(
     db: &Arc<Mutex<Connection>>,
     upbit: &UpbitClient,
+    pendings: Vec<PendingOrder>,
 ) -> Result<usize, BoxErr> {
-    let pendings = {
-        let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
-        live_repo::list_pending_wait(&conn)
-            .map_err(|e| -> BoxErr { e.to_string().into() })?
-    };
-    if pendings.is_empty() {
-        return Ok(0);
-    }
     let now = Utc::now();
     let mut resolved = 0usize;
     for p in pendings {
@@ -270,4 +263,60 @@ pub async fn reconcile_pending_orders(
         }
     }
     Ok(resolved)
+}
+
+/// Drive one reconcile pass across ALL sessions: scan pending_orders.status='wait',
+/// call get_order for each, and either mark resolved (done/cancel) or attempt
+/// timeout cancellation. Errors on individual orders are logged and skipped
+/// — one bad uuid shouldn't prevent the rest from being checked.
+///
+/// NOTE: still used by session_engine.rs until Task 12 migrates the call site
+/// to `reconcile_pending_orders_for_session`.
+#[allow(dead_code)]
+pub async fn reconcile_pending_orders(
+    db: &Arc<Mutex<Connection>>,
+    upbit: &UpbitClient,
+) -> Result<usize, BoxErr> {
+    let pendings = {
+        let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
+        live_repo::list_pending_wait(&conn)
+            .map_err(|e| -> BoxErr { e.to_string().into() })?
+    };
+    if pendings.is_empty() {
+        return Ok(0);
+    }
+    reconcile_inner(db, upbit, pendings).await
+}
+
+/// Per-session reconcile entrypoint for multi-account safety. Fetches only
+/// THIS session's pending orders and uses the account's own UpbitClient so
+/// that account A's client never touches account B's order UUIDs.
+///
+/// Returns Ok(0) on empty pendings or if the account's keys aren't configured
+/// (logs the error but does not propagate — a missing key config must not
+/// crash the whole engine cycle).
+pub async fn reconcile_pending_orders_for_session(
+    db: &Arc<Mutex<Connection>>,
+    session_id: i64,
+    upbit_account_id: i64,
+) -> Result<usize, BoxErr> {
+    let pendings = {
+        let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
+        live_repo::list_session_pending_wait(&conn, session_id)
+            .map_err(|e| -> BoxErr { e.to_string().into() })?
+    };
+    if pendings.is_empty() {
+        return Ok(0);
+    }
+    let upbit = match crate::commands::upbit_keys::upbit_client_for(upbit_account_id) {
+        Ok(c) => c,
+        Err(e) => {
+            crate::live_log!(
+                "[pending_tracker] session {} — cannot build client for account {}: {e}",
+                session_id, upbit_account_id,
+            );
+            return Ok(0);
+        }
+    };
+    reconcile_inner(db, &upbit, pendings).await
 }
