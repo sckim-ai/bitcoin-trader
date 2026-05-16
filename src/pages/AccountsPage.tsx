@@ -1,0 +1,138 @@
+import { useEffect, useState } from "react";
+import { Users, Plus } from "lucide-react";
+import { Button } from "../components/ui/Button";
+import { AccountCard } from "../components/accounts/AccountCard";
+import { AddAccountDialog } from "../components/accounts/AddAccountDialog";
+import { confirmDialog } from "../components/ui/ConfirmDialog";
+import {
+  listUpbitAccounts,
+  testUpbitAccountConnection,
+  setUpbitAccountEnabled,
+  deleteUpbitAccount,
+} from "../lib/live";
+import type { UpbitAccount } from "../types";
+
+export default function AccountsPage() {
+  const [accounts, setAccounts] = useState<UpbitAccount[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showAddDialog, setShowAddDialog] = useState(false);
+
+  // Per-account test state
+  const [testing, setTesting] = useState<Record<number, boolean>>({});
+  const [testResults, setTestResults] = useState<Record<number, string | null>>({});
+
+  const refresh = async () => {
+    setLoading(true);
+    try {
+      setAccounts(await listUpbitAccounts());
+    } catch (e) {
+      console.error("listUpbitAccounts failed:", e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { refresh(); }, []);
+
+  const handleTest = async (id: number) => {
+    setTesting((s) => ({ ...s, [id]: true }));
+    setTestResults((s) => ({ ...s, [id]: "⏳ 연결 테스트 중…" }));
+    try {
+      const n = await testUpbitAccountConnection(id);
+      setTestResults((s) => ({ ...s, [id]: `✓ 연결 성공 — 보유 통화 ${n}개` }));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setTestResults((s) => ({ ...s, [id]: `✗ 실패: ${msg}` }));
+    } finally {
+      setTesting((s) => ({ ...s, [id]: false }));
+    }
+  };
+
+  const handleEdit = (_id: number) => {
+    // Task 18에서 EditAccountDialog 연결
+  };
+
+  const handleToggleEnabled = async (id: number, next: boolean) => {
+    try {
+      await setUpbitAccountEnabled(id, next);
+      await refresh();
+    } catch (e) {
+      console.error("setUpbitAccountEnabled failed:", e);
+    }
+  };
+
+  const handleDelete = async (id: number) => {
+    const account = accounts.find((a) => a.id === id);
+    const ok = await confirmDialog({
+      title: "계정 삭제",
+      severity: "danger",
+      confirmLabel: "삭제",
+      body: (
+        <div className="space-y-2">
+          <p>
+            <span className="font-semibold text-zinc-200">{account?.label ?? `계정 #${id}`}</span>을 삭제합니다.
+          </p>
+          <p className="text-xs text-zinc-500">OS 키체인의 API 키도 함께 삭제됩니다. 이 작업은 되돌릴 수 없습니다.</p>
+        </div>
+      ),
+    });
+    if (!ok) return;
+    try {
+      await deleteUpbitAccount(id);
+      setTestResults((s) => { const next = { ...s }; delete next[id]; return next; });
+      await refresh();
+    } catch (e) {
+      console.error("deleteUpbitAccount failed:", e);
+    }
+  };
+
+  return (
+    <div className="space-y-6 max-w-3xl animate-fade-in">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-semibold text-zinc-100 flex items-center gap-2">
+          <Users size={22} className="text-zinc-500" />
+          Upbit 계정 관리
+        </h1>
+        <Button size="sm" onClick={() => setShowAddDialog(true)}>
+          <Plus size={14} />
+          계정 추가
+        </Button>
+      </div>
+
+      {/* Content */}
+      {loading ? (
+        <p className="text-sm text-zinc-500">불러오는 중…</p>
+      ) : accounts.length === 0 ? (
+        <div className="text-center py-16 text-zinc-500 space-y-2">
+          <Users size={40} className="mx-auto text-zinc-700" />
+          <p className="text-sm">등록된 계정이 없습니다.</p>
+          <p className="text-xs">
+            "+ 계정 추가" 버튼으로 Upbit API 키를 등록하세요.
+          </p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {accounts.map((account) => (
+            <AccountCard
+              key={account.id}
+              account={account}
+              onTest={handleTest}
+              onEdit={handleEdit}
+              onDelete={handleDelete}
+              onToggleEnabled={handleToggleEnabled}
+              testing={testing[account.id]}
+              testResult={testResults[account.id]}
+            />
+          ))}
+        </div>
+      )}
+
+      <AddAccountDialog
+        open={showAddDialog}
+        onClose={() => setShowAddDialog(false)}
+        onAdded={refresh}
+      />
+    </div>
+  );
+}
