@@ -28,6 +28,9 @@ pub struct NotificationManager {
     telegram: Option<TelegramClient>,
     /// FCM device token (stored separately from server key)
     fcm_device_token: String,
+    /// Prepended to Discord messages only. e.g. "[Main Account] "
+    /// Empty string means no prefix (single-account or unknown account).
+    account_prefix: String,
 }
 
 impl NotificationManager {
@@ -39,6 +42,7 @@ impl NotificationManager {
             discord: None,
             telegram: None,
             fcm_device_token: String::new(),
+            account_prefix: String::new(),
         };
 
         let mut stmt = match conn.prepare(
@@ -95,6 +99,17 @@ impl NotificationManager {
         }
 
         mgr
+    }
+
+    /// Set the account label used to prefix Discord notifications.
+    /// Call this after `from_db` when the session's `account_label` is known.
+    /// `None` → no prefix (single account or label deleted).
+    pub fn with_account_label(mut self, label: Option<&str>) -> Self {
+        self.account_prefix = match label {
+            Some(l) if !l.is_empty() => format!("[{l}] "),
+            _ => String::new(),
+        };
+        self
     }
 
     pub async fn notify_trade(
@@ -237,7 +252,12 @@ impl NotificationManager {
                 .await;
         }
         if let Some(discord) = &self.discord {
-            let _ = discord.send(message).await;
+            let discord_msg = if self.account_prefix.is_empty() {
+                message.to_string()
+            } else {
+                format!("{}{}", self.account_prefix, message)
+            };
+            let _ = discord.send(&discord_msg).await;
         }
         if let Some(telegram) = &self.telegram {
             let _ = telegram.send(message).await;
@@ -248,13 +268,20 @@ impl NotificationManager {
     /// Telegram/FCM. Lets us use Discord's structured format (color/title/
     /// fields) without giving up the simpler channels — each gets the
     /// representation that fits its medium.
-    async fn send_split(&self, embed: serde_json::Value, plain_text: &str) {
+    async fn send_split(&self, mut embed: serde_json::Value, plain_text: &str) {
         if let Some(fcm) = &self.fcm {
             let _ = fcm
                 .send(&self.fcm_device_token, "BTC Trader", plain_text, "high")
                 .await;
         }
         if let Some(discord) = &self.discord {
+            // Prepend account prefix to embed title for Discord only.
+            if !self.account_prefix.is_empty() {
+                if let Some(title) = embed.get("title").and_then(|v| v.as_str()) {
+                    let prefixed = format!("{}{}", self.account_prefix, title);
+                    embed["title"] = serde_json::Value::String(prefixed);
+                }
+            }
             let payload = json!({ "embeds": [embed] });
             let _ = discord.send_payload(&payload).await;
         }

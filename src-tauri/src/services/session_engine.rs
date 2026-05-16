@@ -433,6 +433,7 @@ async fn real_reconcile_step<'a>(
     let notifier = {
         let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
         crate::notifications::manager::NotificationManager::from_db(&conn, session.user_id)
+            .with_account_label(session.account_label.as_deref())
     };
     let prev_signal = session.last_signal.clone().unwrap_or_default();
 
