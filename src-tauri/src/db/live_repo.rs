@@ -17,15 +17,19 @@ pub fn insert_preset(
     timeframe: Option<&str>,
     since_ts: Option<&str>,
     until_ts: Option<&str>,
+    baseline_return: Option<f64>,
+    baseline_trades: Option<i32>,
 ) -> Result<i64> {
     let now = Utc::now().to_rfc3339();
     conn.execute(
         "INSERT INTO presets
             (user_id, name, strategy_key, params_json, source, source_run_id,
-             market, timeframe, since_ts, until_ts, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+             market, timeframe, since_ts, until_ts,
+             baseline_return, baseline_trades, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         params![user_id, name, strategy_key, params_json, source, source_run_id,
-                market, timeframe, since_ts, until_ts, now],
+                market, timeframe, since_ts, until_ts,
+                baseline_return, baseline_trades, now],
     )?;
     Ok(conn.last_insert_rowid())
 }
@@ -33,7 +37,8 @@ pub fn insert_preset(
 pub fn get_preset(conn: &Connection, id: i64) -> Result<Option<Preset>> {
     conn.query_row(
         "SELECT id, user_id, name, strategy_key, params_json, source, source_run_id,
-                market, timeframe, since_ts, until_ts, created_at
+                market, timeframe, since_ts, until_ts,
+                baseline_return, baseline_trades, created_at
          FROM presets WHERE id = ?1",
         [id],
         row_to_preset,
@@ -44,7 +49,8 @@ pub fn get_preset(conn: &Connection, id: i64) -> Result<Option<Preset>> {
 pub fn list_presets(conn: &Connection, user_id: i64) -> Result<Vec<Preset>> {
     let mut stmt = conn.prepare(
         "SELECT id, user_id, name, strategy_key, params_json, source, source_run_id,
-                market, timeframe, since_ts, until_ts, created_at
+                market, timeframe, since_ts, until_ts,
+                baseline_return, baseline_trades, created_at
          FROM presets WHERE user_id = ?1 ORDER BY created_at DESC",
     )?;
     let rows = stmt.query_map([user_id], row_to_preset)?;
@@ -64,7 +70,9 @@ fn row_to_preset(row: &rusqlite::Row) -> Result<Preset> {
         timeframe: row.get(8)?,
         since_ts: row.get(9)?,
         until_ts: row.get(10)?,
-        created_at: row.get(11)?,
+        baseline_return: row.get(11)?,
+        baseline_trades: row.get(12)?,
+        created_at: row.get(13)?,
     })
 }
 
@@ -83,25 +91,34 @@ pub fn insert_session(
     mode: &str,
     initial_capital: f64,
     start_ts: &str,
+    upbit_account_id: Option<i64>,
 ) -> Result<i64> {
+    // real_started_at = created_at = now. start_ts may be earlier (preset's
+    // backtest window start). live_return is the cumulative % from
+    // real_started_at onward; starts at 0.
     let now = Utc::now().to_rfc3339();
     conn.execute(
         "INSERT INTO live_sessions
             (user_id, label, preset_id, market, mode, status, initial_capital,
-             start_ts, current_position, current_equity, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, 'stopped', ?6, ?7, 'idle', ?6, ?8)",
-        params![user_id, label, preset_id, market, mode, initial_capital, start_ts, now],
+             start_ts, real_started_at, current_position, current_equity,
+             live_return, created_at, upbit_account_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'stopped', ?6, ?7, ?8, 'idle', ?6, 0.0, ?8, ?9)",
+        params![user_id, label, preset_id, market, mode, initial_capital, start_ts, now, upbit_account_id],
     )?;
     Ok(conn.last_insert_rowid())
 }
 
 pub fn get_session(conn: &Connection, id: i64) -> Result<Option<LiveSession>> {
     conn.query_row(
-        "SELECT id, user_id, label, preset_id, market, mode, status, initial_capital,
-                start_ts, real_started_at, last_cycle_ts, last_signal,
-                current_position, current_buy_price, current_buy_volume, current_equity,
-                created_at
-         FROM live_sessions WHERE id = ?1",
+        "SELECT ls.id, ls.user_id, ls.label, ls.preset_id, ls.market, ls.mode, ls.status,
+                ls.initial_capital, ls.start_ts, ls.real_started_at, ls.last_cycle_ts,
+                ls.last_signal, ls.current_position, ls.current_buy_price, ls.current_buy_volume,
+                ls.current_equity, ls.live_return, ls.max_daily_loss_pct, ls.max_daily_trades,
+                ls.max_order_krw, ls.created_at,
+                ls.upbit_account_id, ua.label AS account_label
+         FROM live_sessions ls
+         LEFT JOIN upbit_accounts ua ON ua.id = ls.upbit_account_id
+         WHERE ls.id = ?1",
         [id],
         row_to_session,
     )
@@ -110,11 +127,15 @@ pub fn get_session(conn: &Connection, id: i64) -> Result<Option<LiveSession>> {
 
 pub fn list_sessions(conn: &Connection, user_id: i64) -> Result<Vec<LiveSession>> {
     let mut stmt = conn.prepare(
-        "SELECT id, user_id, label, preset_id, market, mode, status, initial_capital,
-                start_ts, real_started_at, last_cycle_ts, last_signal,
-                current_position, current_buy_price, current_buy_volume, current_equity,
-                created_at
-         FROM live_sessions WHERE user_id = ?1 ORDER BY created_at DESC",
+        "SELECT ls.id, ls.user_id, ls.label, ls.preset_id, ls.market, ls.mode, ls.status,
+                ls.initial_capital, ls.start_ts, ls.real_started_at, ls.last_cycle_ts,
+                ls.last_signal, ls.current_position, ls.current_buy_price, ls.current_buy_volume,
+                ls.current_equity, ls.live_return, ls.max_daily_loss_pct, ls.max_daily_trades,
+                ls.max_order_krw, ls.created_at,
+                ls.upbit_account_id, ua.label AS account_label
+         FROM live_sessions ls
+         LEFT JOIN upbit_accounts ua ON ua.id = ls.upbit_account_id
+         WHERE ls.user_id = ?1 ORDER BY ls.created_at DESC",
     )?;
     let rows = stmt.query_map([user_id], row_to_session)?;
     rows.collect()
@@ -122,11 +143,15 @@ pub fn list_sessions(conn: &Connection, user_id: i64) -> Result<Vec<LiveSession>
 
 pub fn list_running_sessions(conn: &Connection) -> Result<Vec<LiveSession>> {
     let mut stmt = conn.prepare(
-        "SELECT id, user_id, label, preset_id, market, mode, status, initial_capital,
-                start_ts, real_started_at, last_cycle_ts, last_signal,
-                current_position, current_buy_price, current_buy_volume, current_equity,
-                created_at
-         FROM live_sessions WHERE status = 'running'",
+        "SELECT ls.id, ls.user_id, ls.label, ls.preset_id, ls.market, ls.mode, ls.status,
+                ls.initial_capital, ls.start_ts, ls.real_started_at, ls.last_cycle_ts,
+                ls.last_signal, ls.current_position, ls.current_buy_price, ls.current_buy_volume,
+                ls.current_equity, ls.live_return, ls.max_daily_loss_pct, ls.max_daily_trades,
+                ls.max_order_krw, ls.created_at,
+                ls.upbit_account_id, ua.label AS account_label
+         FROM live_sessions ls
+         LEFT JOIN upbit_accounts ua ON ua.id = ls.upbit_account_id
+         WHERE ls.status = 'running'",
     )?;
     let rows = stmt.query_map([], row_to_session)?;
     rows.collect()
@@ -139,6 +164,45 @@ pub fn set_session_status(conn: &Connection, id: i64, status: &str) -> Result<us
     )
 }
 
+/// Switch a session between paper and real modes. Caller is responsible for
+/// validating multi-real=1 and that API keys are configured before promoting.
+pub fn set_session_mode(conn: &Connection, id: i64, mode: &str) -> Result<usize> {
+    conn.execute(
+        "UPDATE live_sessions SET mode = ?1 WHERE id = ?2",
+        params![mode, id],
+    )
+}
+
+/// Set the per-session BUY cap. `None` clears the cap (full balance).
+pub fn set_session_max_order_krw(conn: &Connection, id: i64, cap: Option<f64>) -> Result<usize> {
+    conn.execute(
+        "UPDATE live_sessions SET max_order_krw = ?1 WHERE id = ?2",
+        params![cap, id],
+    )
+}
+
+/// Stop every running real session. Returns the affected ids so the caller
+/// can emit per-session events. Mode stays 'real' — the user explicitly
+/// promoted these and we don't want to silently demote on emergency stop.
+pub fn stop_all_real_sessions(conn: &Connection) -> Result<Vec<i64>> {
+    let mut stmt = conn.prepare(
+        "SELECT id FROM live_sessions WHERE mode = 'real' AND status = 'running'",
+    )?;
+    let ids: Vec<i64> = stmt
+        .query_map([], |r| r.get::<_, i64>(0))?
+        .collect::<Result<Vec<_>>>()?;
+    drop(stmt);
+    if !ids.is_empty() {
+        conn.execute(
+            "UPDATE live_sessions SET status = 'stopped'
+             WHERE mode = 'real' AND status = 'running'",
+            [],
+        )?;
+    }
+    Ok(ids)
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn update_session_cycle(
     conn: &Connection,
     id: i64,
@@ -148,6 +212,7 @@ pub fn update_session_cycle(
     current_buy_price: Option<f64>,
     current_buy_volume: Option<f64>,
     current_equity: f64,
+    live_return: f64,
 ) -> Result<usize> {
     conn.execute(
         "UPDATE live_sessions SET
@@ -156,15 +221,53 @@ pub fn update_session_cycle(
             current_position = ?3,
             current_buy_price = ?4,
             current_buy_volume = ?5,
-            current_equity = ?6
-         WHERE id = ?7",
+            current_equity = ?6,
+            live_return = ?7
+         WHERE id = ?8",
         params![last_cycle_ts, last_signal, current_position,
-                current_buy_price, current_buy_volume, current_equity, id],
+                current_buy_price, current_buy_volume, current_equity, live_return, id],
     )
 }
 
 pub fn delete_session(conn: &Connection, id: i64) -> Result<usize> {
     conn.execute("DELETE FROM live_sessions WHERE id = ?1", [id])
+}
+
+/// Replace this session's paper-trade rows with a clean slate. Real-trade
+/// rows (`is_real=1`) are preserved — those represent actual Upbit fills and
+/// should never be deleted. Used by session_engine before inserting the
+/// current simulation's trades, guaranteeing live_trades always matches
+/// the latest result.trades + result.signal_log.
+pub fn delete_paper_trades(conn: &Connection, session_id: i64) -> Result<usize> {
+    conn.execute(
+        "DELETE FROM live_trades WHERE session_id = ?1 AND is_real = 0",
+        [session_id],
+    )
+}
+
+/// Save the latest cycle's signal_log JSON. Overwrites the previous each
+/// cycle so reads always see the freshest mapping.
+pub fn update_session_signal_log(
+    conn: &Connection,
+    id: i64,
+    signal_log_json: &str,
+) -> Result<usize> {
+    conn.execute(
+        "UPDATE live_sessions SET signal_log_json = ?1 WHERE id = ?2",
+        params![signal_log_json, id],
+    )
+}
+
+/// Returns the persisted signal_log JSON for a session. None when the column
+/// is NULL (session has never run a cycle).
+pub fn get_session_signal_log(conn: &Connection, id: i64) -> Result<Option<String>> {
+    conn.query_row(
+        "SELECT signal_log_json FROM live_sessions WHERE id = ?1",
+        [id],
+        |row| row.get::<_, Option<String>>(0),
+    )
+    .optional()
+    .map(|opt| opt.flatten())
 }
 
 fn row_to_session(row: &rusqlite::Row) -> Result<LiveSession> {
@@ -185,7 +288,13 @@ fn row_to_session(row: &rusqlite::Row) -> Result<LiveSession> {
         current_buy_price: row.get(13)?,
         current_buy_volume: row.get(14)?,
         current_equity: row.get(15)?,
-        created_at: row.get(16)?,
+        live_return: row.get(16)?,
+        max_daily_loss_pct: row.get(17)?,
+        max_daily_trades: row.get(18)?,
+        max_order_krw: row.get(19)?,
+        created_at: row.get(20)?,
+        upbit_account_id: row.get(21)?,
+        account_label: row.get(22)?,
     })
 }
 
@@ -247,6 +356,161 @@ pub fn count_completed_trades(conn: &Connection, session_id: i64) -> Result<usiz
     Ok(n as usize)
 }
 
+// ─── Safety limits (Phase 4A.6) ───
+
+/// Sum of pnl on is_real=1 sells since UTC midnight today, divided by
+/// `initial_capital * 100` to express as a percentage. Negative when in
+/// loss. Used by the daily-loss circuit breaker.
+pub fn today_realized_pnl_pct(
+    conn: &Connection,
+    session_id: i64,
+    initial_capital: f64,
+) -> Result<f64> {
+    if initial_capital <= 0.0 {
+        return Ok(0.0);
+    }
+    // SQLite "now" is UTC; date('now') gives YYYY-MM-DD. We compare against
+    // the date prefix of `ts` (RFC3339 begins with YYYY-MM-DD). Both strings
+    // are UTC-anchored so prefix comparison is correct.
+    let today: String = conn.query_row("SELECT date('now')", [], |r| r.get(0))?;
+    let pnl_sum: Option<f64> = conn.query_row(
+        "SELECT COALESCE(SUM(pnl), 0)
+           FROM live_trades
+          WHERE session_id = ?1 AND side = 'sell' AND is_real = 1
+            AND substr(ts, 1, 10) = ?2",
+        params![session_id, today],
+        |r| r.get(0),
+    )?;
+    Ok(pnl_sum.unwrap_or(0.0) / initial_capital * 100.0)
+}
+
+/// Number of is_real=1 sells today (UTC). Used by the per-day trade-count
+/// circuit breaker.
+pub fn today_real_trades_count(conn: &Connection, session_id: i64) -> Result<i64> {
+    let today: String = conn.query_row("SELECT date('now')", [], |r| r.get(0))?;
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM live_trades
+          WHERE session_id = ?1 AND side = 'sell' AND is_real = 1
+            AND substr(ts, 1, 10) = ?2",
+        params![session_id, today],
+        |r| r.get(0),
+    )?;
+    Ok(n)
+}
+
+// ─── Pending Orders (Phase 4A.5) ───
+
+#[derive(Debug, Clone)]
+pub struct PendingOrder {
+    pub uuid: String,
+    pub session_id: i64,
+    pub side: String,            // "bid" | "ask"
+    pub market: String,
+    pub ord_type: String,        // "price" | "market" | "limit"
+    pub target_price: Option<f64>,
+    pub requested: f64,          // bid → KRW amount, ask → coin volume
+    pub placed_at: String,
+    pub status: String,          // "wait" | "done" | "cancel"
+    pub last_checked: Option<String>,
+    pub resolved_at: Option<String>,
+    /// Cost basis at SELL-placement time (NULL for BUYs).
+    /// Frozen here so late fills price correctly against the cost basis
+    /// that was current at the moment the SELL decision was made.
+    pub cost_basis_price: Option<f64>,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn insert_pending_order(
+    conn: &Connection,
+    uuid: &str,
+    session_id: i64,
+    side: &str,
+    market: &str,
+    ord_type: &str,
+    target_price: Option<f64>,
+    requested: f64,
+    placed_at: &str,
+    status: &str,
+    cost_basis_price: Option<f64>,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO pending_orders
+            (uuid, session_id, side, market, ord_type, target_price, requested,
+             placed_at, status, cost_basis_price)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+         ON CONFLICT(uuid) DO UPDATE SET status = excluded.status",
+        params![uuid, session_id, side, market, ord_type, target_price, requested,
+                placed_at, status, cost_basis_price],
+    )?;
+    Ok(())
+}
+
+/// `wait`-state orders for a single session. Used at the start of every
+/// real cycle to find orders that need cancelling so we can re-peg at the
+/// new bar's close.
+pub fn list_session_pending_wait(
+    conn: &Connection,
+    session_id: i64,
+) -> Result<Vec<PendingOrder>> {
+    let mut stmt = conn.prepare(
+        "SELECT uuid, session_id, side, market, ord_type, target_price, requested,
+                placed_at, status, last_checked, resolved_at, cost_basis_price
+         FROM pending_orders WHERE session_id = ?1 AND status = 'wait'
+         ORDER BY placed_at ASC",
+    )?;
+    let rows = stmt.query_map([session_id], row_to_pending)?;
+    rows.collect()
+}
+
+/// All `wait`-state orders across all sessions. Tracker reconciles these
+/// at the start of every cycle.
+pub fn list_pending_wait(conn: &Connection) -> Result<Vec<PendingOrder>> {
+    let mut stmt = conn.prepare(
+        "SELECT uuid, session_id, side, market, ord_type, target_price, requested,
+                placed_at, status, last_checked, resolved_at, cost_basis_price
+         FROM pending_orders WHERE status = 'wait' ORDER BY placed_at ASC",
+    )?;
+    let rows = stmt.query_map([], row_to_pending)?;
+    rows.collect()
+}
+
+fn row_to_pending(row: &rusqlite::Row) -> Result<PendingOrder> {
+    Ok(PendingOrder {
+        uuid: row.get(0)?,
+        session_id: row.get(1)?,
+        side: row.get(2)?,
+        market: row.get(3)?,
+        ord_type: row.get(4)?,
+        target_price: row.get(5)?,
+        requested: row.get(6)?,
+        placed_at: row.get(7)?,
+        status: row.get(8)?,
+        last_checked: row.get(9)?,
+        resolved_at: row.get(10)?,
+        cost_basis_price: row.get(11)?,
+    })
+}
+
+pub fn mark_pending_resolved(
+    conn: &Connection,
+    uuid: &str,
+    new_status: &str,    // "done" | "cancel"
+    resolved_at: &str,
+) -> Result<usize> {
+    conn.execute(
+        "UPDATE pending_orders SET status = ?1, resolved_at = ?2, last_checked = ?2
+         WHERE uuid = ?3",
+        params![new_status, resolved_at, uuid],
+    )
+}
+
+pub fn touch_pending_check(conn: &Connection, uuid: &str, when: &str) -> Result<usize> {
+    conn.execute(
+        "UPDATE pending_orders SET last_checked = ?1 WHERE uuid = ?2",
+        params![when, uuid],
+    )
+}
+
 // ─── Live Equity ───
 
 pub fn upsert_equity(conn: &Connection, session_id: i64, ts: &str, equity: f64, position: &str) -> Result<()> {
@@ -279,14 +543,17 @@ mod tests {
     fn setup_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
-        let s1 = include_str!("../../migrations/001_initial.sql");
-        conn.execute_batch(s1).unwrap();
-        let s2 = include_str!("../../migrations/002_users.sql");
-        conn.execute_batch(s2).unwrap();
-        let s6 = include_str!("../../migrations/006_live_trading.sql");
-        conn.execute_batch(s6).unwrap();
-        let s7 = include_str!("../../migrations/007_preset_context.sql");
-        conn.execute_batch(s7).unwrap();
+        conn.execute_batch(include_str!("../../migrations/001_initial.sql")).unwrap();
+        conn.execute_batch(include_str!("../../migrations/002_users.sql")).unwrap();
+        conn.execute_batch(include_str!("../../migrations/006_live_trading.sql")).unwrap();
+        conn.execute_batch(include_str!("../../migrations/007_preset_context.sql")).unwrap();
+        conn.execute_batch(include_str!("../../migrations/008_session_signal_log.sql")).unwrap();
+        conn.execute_batch(include_str!("../../migrations/009_baseline_metrics.sql")).unwrap();
+        conn.execute_batch(include_str!("../../migrations/010_pending_orders.sql")).unwrap();
+        conn.execute_batch(include_str!("../../migrations/011_safety_limits.sql")).unwrap();
+        conn.execute_batch(include_str!("../../migrations/012_order_caps.sql")).unwrap();
+        conn.execute_batch(include_str!("../../migrations/013_pending_cost_basis.sql")).unwrap();
+        conn.execute_batch(include_str!("../../migrations/014_upbit_accounts.sql")).unwrap();
         conn
     }
 
@@ -295,7 +562,7 @@ mod tests {
     #[test]
     fn test_preset_insert_and_get() {
         let conn = setup_db();
-        let id = insert_preset(&conn, 1, "V3-A", "V3", r#"{"foo":1}"#, "manual", None, None, None, None, None).unwrap();
+        let id = insert_preset(&conn, 1, "V3-A", "V3", r#"{"foo":1}"#, "manual", None, None, None, None, None, None, None).unwrap();
         let preset = get_preset(&conn, id).unwrap().expect("preset should exist");
         assert_eq!(preset.name, "V3-A");
         assert_eq!(preset.strategy_key, "V3");
@@ -305,9 +572,9 @@ mod tests {
     #[test]
     fn test_preset_list_ordering() {
         let conn = setup_db();
-        insert_preset(&conn, 1, "A", "V3", "{}", "manual", None, None, None, None, None).unwrap();
+        insert_preset(&conn, 1, "A", "V3", "{}", "manual", None, None, None, None, None, None, None).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(10));
-        insert_preset(&conn, 1, "B", "V3", "{}", "manual", None, None, None, None, None).unwrap();
+        insert_preset(&conn, 1, "B", "V3", "{}", "manual", None, None, None, None, None, None, None).unwrap();
         let list = list_presets(&conn, 1).unwrap();
         assert_eq!(list.len(), 2);
         assert_eq!(list[0].name, "B"); // 최신이 먼저
@@ -316,7 +583,7 @@ mod tests {
     #[test]
     fn test_preset_delete() {
         let conn = setup_db();
-        let id = insert_preset(&conn, 1, "X", "V3", "{}", "manual", None, None, None, None, None).unwrap();
+        let id = insert_preset(&conn, 1, "X", "V3", "{}", "manual", None, None, None, None, None, None, None).unwrap();
         let n = delete_preset(&conn, id).unwrap();
         assert_eq!(n, 1);
         assert!(get_preset(&conn, id).unwrap().is_none());
@@ -325,8 +592,8 @@ mod tests {
     #[test]
     fn test_preset_unique_name_per_user() {
         let conn = setup_db();
-        insert_preset(&conn, 1, "dup", "V3", "{}", "manual", None, None, None, None, None).unwrap();
-        let result = insert_preset(&conn, 1, "dup", "V3", "{}", "manual", None, None, None, None, None);
+        insert_preset(&conn, 1, "dup", "V3", "{}", "manual", None, None, None, None, None, None, None).unwrap();
+        let result = insert_preset(&conn, 1, "dup", "V3", "{}", "manual", None, None, None, None, None, None, None);
         assert!(result.is_err(), "duplicate name should fail");
     }
 
@@ -335,8 +602,8 @@ mod tests {
     #[test]
     fn test_session_insert_and_defaults() {
         let conn = setup_db();
-        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None).unwrap();
-        let sid = insert_session(&conn, 1, "S1", pid, "KRW-ETH", "paper", 1_000_000.0, "2026-04-24T00:00:00Z").unwrap();
+        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None, None, None).unwrap();
+        let sid = insert_session(&conn, 1, "S1", pid, "KRW-ETH", "paper", 1_000_000.0, "2026-04-24T00:00:00Z", None).unwrap();
         let s = get_session(&conn, sid).unwrap().expect("session exists");
         assert_eq!(s.label, "S1");
         assert_eq!(s.status, "stopped");
@@ -348,8 +615,8 @@ mod tests {
     #[test]
     fn test_session_status_transitions() {
         let conn = setup_db();
-        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None).unwrap();
-        let sid = insert_session(&conn, 1, "S1", pid, "KRW-ETH", "paper", 1_000_000.0, "2026-04-24T00:00:00Z").unwrap();
+        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None, None, None).unwrap();
+        let sid = insert_session(&conn, 1, "S1", pid, "KRW-ETH", "paper", 1_000_000.0, "2026-04-24T00:00:00Z", None).unwrap();
 
         assert_eq!(list_running_sessions(&conn).unwrap().len(), 0);
         set_session_status(&conn, sid, "running").unwrap();
@@ -359,13 +626,68 @@ mod tests {
     }
 
     #[test]
+    fn test_set_session_mode_and_count() {
+        // count_real_sessions removed; replicate with inline SQL.
+        let count_real = |c: &Connection, exclude: Option<i64>| -> i64 {
+            match exclude {
+                Some(id) => c.query_row(
+                    "SELECT COUNT(*) FROM live_sessions WHERE mode = 'real' AND id != ?1",
+                    [id], |r| r.get(0),
+                ).unwrap(),
+                None => c.query_row(
+                    "SELECT COUNT(*) FROM live_sessions WHERE mode = 'real'",
+                    [], |r| r.get(0),
+                ).unwrap(),
+            }
+        };
+
+        let conn = setup_db();
+        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None, None, None).unwrap();
+        let s1 = insert_session(&conn, 1, "A", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z", None).unwrap();
+        let s2 = insert_session(&conn, 1, "B", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z", None).unwrap();
+
+        assert_eq!(count_real(&conn, None), 0);
+
+        set_session_mode(&conn, s1, "real").unwrap();
+        assert_eq!(count_real(&conn, None), 1);
+        assert_eq!(count_real(&conn, Some(s1)), 0);
+
+        set_session_mode(&conn, s2, "real").unwrap();
+        assert_eq!(count_real(&conn, None), 2);
+        assert_eq!(count_real(&conn, Some(s1)), 1);
+    }
+
+    #[test]
+    fn test_stop_all_real_sessions() {
+        let conn = setup_db();
+        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None, None, None).unwrap();
+        let s1 = insert_session(&conn, 1, "A", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z", None).unwrap();
+        let s2 = insert_session(&conn, 1, "B", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z", None).unwrap();
+
+        // s1 = running real, s2 = running paper, s3 = stopped real
+        let s3 = insert_session(&conn, 1, "C", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z", None).unwrap();
+        set_session_mode(&conn, s1, "real").unwrap();
+        set_session_status(&conn, s1, "running").unwrap();
+        set_session_status(&conn, s2, "running").unwrap();
+        set_session_mode(&conn, s3, "real").unwrap();
+        // s3 stays 'stopped'
+
+        let stopped = stop_all_real_sessions(&conn).unwrap();
+        assert_eq!(stopped, vec![s1]); // only running real
+        assert_eq!(get_session(&conn, s1).unwrap().unwrap().status, "stopped");
+        assert_eq!(get_session(&conn, s2).unwrap().unwrap().status, "running"); // paper untouched
+        // mode preserved on s1
+        assert_eq!(get_session(&conn, s1).unwrap().unwrap().mode, "real");
+    }
+
+    #[test]
     fn test_session_cycle_update() {
         let conn = setup_db();
-        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None).unwrap();
-        let sid = insert_session(&conn, 1, "S1", pid, "KRW-ETH", "paper", 1_000_000.0, "2026-04-24T00:00:00Z").unwrap();
+        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None, None, None).unwrap();
+        let sid = insert_session(&conn, 1, "S1", pid, "KRW-ETH", "paper", 1_000_000.0, "2026-04-24T00:00:00Z", None).unwrap();
 
         update_session_cycle(&conn, sid, "2026-04-24T05:00:00Z", "buy", "holding",
-            Some(3_200_000.0), Some(0.312), 1_100_000.0).unwrap();
+            Some(3_200_000.0), Some(0.312), 1_100_000.0, 0.0).unwrap();
 
         let s = get_session(&conn, sid).unwrap().unwrap();
         assert_eq!(s.last_signal.as_deref(), Some("buy"));
@@ -379,8 +701,8 @@ mod tests {
     #[test]
     fn test_trade_insert_and_list() {
         let conn = setup_db();
-        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None).unwrap();
-        let sid = insert_session(&conn, 1, "S", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z").unwrap();
+        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None, None, None).unwrap();
+        let sid = insert_session(&conn, 1, "S", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z", None).unwrap();
 
         insert_trade(&conn, sid, "2026-04-24T01:00:00Z", "buy", 3_000_000.0, 0.3, 450.0, "buy", None, None, false).unwrap();
         insert_trade(&conn, sid, "2026-04-24T03:00:00Z", "sell", 3_100_000.0, 0.3, 465.0, "sell", Some(30_000.0), Some(3.3), false).unwrap();
@@ -395,8 +717,8 @@ mod tests {
     #[test]
     fn test_count_completed_trades() {
         let conn = setup_db();
-        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None).unwrap();
-        let sid = insert_session(&conn, 1, "S", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z").unwrap();
+        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None, None, None).unwrap();
+        let sid = insert_session(&conn, 1, "S", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z", None).unwrap();
 
         assert_eq!(count_completed_trades(&conn, sid).unwrap(), 0);
         insert_trade(&conn, sid, "2026-04-24T01:00:00Z", "buy", 3e6, 0.3, 450.0, "buy", None, None, false).unwrap();
@@ -408,8 +730,8 @@ mod tests {
     #[test]
     fn test_equity_upsert() {
         let conn = setup_db();
-        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None).unwrap();
-        let sid = insert_session(&conn, 1, "S", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z").unwrap();
+        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None, None, None).unwrap();
+        let sid = insert_session(&conn, 1, "S", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z", None).unwrap();
 
         upsert_equity(&conn, sid, "2026-04-24T01:00:00Z", 1_000_000.0, "idle").unwrap();
         upsert_equity(&conn, sid, "2026-04-24T01:00:00Z", 1_050_000.0, "holding").unwrap();
@@ -424,8 +746,8 @@ mod tests {
     #[test]
     fn test_delete_session_cascades() {
         let conn = setup_db();
-        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None).unwrap();
-        let sid = insert_session(&conn, 1, "S", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z").unwrap();
+        let pid = insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None, None, None).unwrap();
+        let sid = insert_session(&conn, 1, "S", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z", None).unwrap();
         insert_trade(&conn, sid, "2026-04-24T01:00:00Z", "buy", 3e6, 0.3, 450.0, "buy", None, None, false).unwrap();
         upsert_equity(&conn, sid, "2026-04-24T01:00:00Z", 1e6, "idle").unwrap();
 

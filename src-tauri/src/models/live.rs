@@ -17,6 +17,11 @@ pub struct Preset {
     pub since_ts: Option<String>,
     /// Backtest window end (YYYY-MM-DD).
     pub until_ts: Option<String>,
+    /// Total return % measured during the simulation that produced this preset.
+    /// None if the preset predates baseline tracking (migration 009).
+    pub baseline_return: Option<f64>,
+    /// Number of completed trades during that same simulation.
+    pub baseline_trades: Option<i32>,
     pub created_at: String,
 }
 
@@ -86,7 +91,28 @@ pub struct LiveSession {
     pub current_buy_price: Option<f64>,
     pub current_buy_volume: Option<f64>,
     pub current_equity: Option<f64>,
+    /// Cumulative return % from real_started_at onward (closed trades only).
+    /// Distinct from preset.baseline_return: this is the live track record,
+    /// not the static backtest result.
+    pub live_return: f64,
+    /// Auto-stop threshold: if today's realized loss% drops below this,
+    /// the session is moved to status='stopped'. Negative number (e.g. -10.0).
+    pub max_daily_loss_pct: f64,
+    /// Auto-stop threshold: if today's is_real=1 sell count reaches this,
+    /// the session is stopped. Defends against runaway loops.
+    pub max_daily_trades: i32,
+    /// Per-session BUY order cap in KRW. None → use the full KRW balance
+    /// (current behaviour). When set, every BUY is `min(krw_balance, cap)`
+    /// before the 0.9995 fee buffer. Sells are always full balance.
+    pub max_order_krw: Option<f64>,
     pub created_at: String,
+    /// 이 세션이 실주문을 보낼 Upbit 계정. NULL은 마이그레이션 직전의
+    /// 옛 세션에서만 발생하고, 신규 세션은 백엔드가 NOT NULL을 강제한다.
+    #[serde(default)]
+    pub upbit_account_id: Option<i64>,
+    /// JOIN으로 가져오는 표시용 라벨. NULL이면 "[삭제됨]"으로 UI가 표시.
+    #[serde(default)]
+    pub account_label: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

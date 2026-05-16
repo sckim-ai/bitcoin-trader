@@ -343,9 +343,9 @@ fn insert_candles_to_db(
 }
 
 /// Create an UpbitClient for public API calls (candle data).
-/// API keys are optional — uses empty strings if not set, since candle endpoints don't require auth.
+/// API keys are optional — public endpoints work with empty strings.
+/// Resolution order: OS keyring → env var → empty.
 fn create_client() -> Result<UpbitClient, String> {
-    let access_key = std::env::var("UPBIT_ACCESS_KEY").unwrap_or_default();
-    let secret_key = std::env::var("UPBIT_SECRET_KEY").unwrap_or_default();
-    Ok(UpbitClient::new(access_key, secret_key))
+    let (access, secret, _) = crate::commands::upbit_keys::load_upbit_keys();
+    Ok(UpbitClient::new(access.unwrap_or_default(), secret.unwrap_or_default()))
 }

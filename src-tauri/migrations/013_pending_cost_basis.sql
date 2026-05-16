@@ -1,0 +1,17 @@
+-- Phase 4A.7+: snapshot the cost basis at pending-SELL placement time.
+--
+-- Why:
+--   pending_order_tracker computes realized P/L for late SELL fills using
+--   `live_sessions.current_buy_price`. That field reflects the CURRENT
+--   position state, but late fills can resolve days after a new BUY has
+--   already updated current_buy_price — the late SELL would then be priced
+--   against a future cost basis (over-/under-stated P/L).
+--
+--   Snapshotting cost basis at SELL placement freezes the correct cost basis
+--   for the lifetime of the pending order, regardless of later position
+--   changes.
+--
+-- Convention:
+--   bid (BUY) pendings  → NULL (no cost basis at entry)
+--   ask (SELL) pendings → snapshot of current_buy_price at placement
+ALTER TABLE pending_orders ADD COLUMN cost_basis_price REAL;

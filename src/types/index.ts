@@ -73,7 +73,6 @@ export interface SimulationResult {
   profit_factor: number;
   avg_trade_return: number;
   max_consecutive_losses: number;
-  fee_adjusted_return: number;
   buy_signals: number;
   sell_signals: number;
   last_position: number;
@@ -174,6 +173,10 @@ export interface Preset {
   timeframe: string | null;
   since_ts: string | null;
   until_ts: string | null;
+  /** total_return % at the time the preset was saved (static baseline). */
+  baseline_return: number | null;
+  /** total_trades at the time the preset was saved. */
+  baseline_trades: number | null;
   created_at: string;
 }
 
@@ -187,6 +190,19 @@ export interface SavePresetArgs {
   partial_params: Record<string, number>;
   source?: string;
   source_run_id?: number;
+  baseline_return?: number;
+  baseline_trades?: number;
+}
+
+export interface UpbitAccount {
+  id: number;
+  user_id: number;
+  label: string;
+  enabled: boolean;
+  created_at: string;
+  has_access_key: boolean;
+  has_secret_key: boolean;
+  has_running_session: boolean;
 }
 
 export interface LiveSession {
@@ -206,6 +222,16 @@ export interface LiveSession {
   current_buy_price: number | null;
   current_buy_volume: number | null;
   current_equity: number | null;
+  /** Cumulative return % from real_started_at onward (closed trades only). */
+  live_return: number;
+  /** Daily realized loss % threshold — auto-stop when today's loss exceeds. */
+  max_daily_loss_pct: number;
+  /** Daily real-sell count threshold — auto-stop on reach. */
+  max_daily_trades: number;
+  /** Per-session BUY cap in KRW. null = no cap (full balance). */
+  max_order_krw: number | null;
+  upbit_account_id: number | null;
+  account_label: string | null;
   created_at: string;
 }
 
@@ -228,6 +254,9 @@ export interface CreateSessionArgs {
   preset_id: number;
   market: string;
   initial_capital: number;
+  /** Optional per-session BUY cap in KRW. Null/omitted = no cap. */
+  max_order_krw?: number | null;
+  upbit_account_id?: number | null;
 }
 
 export interface SessionCycleOutput {

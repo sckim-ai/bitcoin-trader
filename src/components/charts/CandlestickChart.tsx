@@ -4,8 +4,6 @@ import {
   type IChartApi,
   type ISeriesApi,
   type Time,
-  CandlestickSeries,
-  HistogramSeries,
   ColorType,
 } from "lightweight-charts";
 import type { Candle } from "../../types";
@@ -87,7 +85,7 @@ export default function CandlestickChart({ candles, timeframe = "hour", livePric
       },
     });
 
-    const candleSeries = chart.addSeries(CandlestickSeries, {
+    const candleSeries = chart.addCandlestickSeries({
       upColor: "#22c55e",
       downColor: "#ef4444",
       borderDownColor: "#ef4444",
@@ -96,7 +94,7 @@ export default function CandlestickChart({ candles, timeframe = "hour", livePric
       wickUpColor: "#22c55e",
     });
 
-    const volumeSeries = chart.addSeries(HistogramSeries, {
+    const volumeSeries = chart.addHistogramSeries({
       priceFormat: { type: "volume" },
       priceScaleId: "volume",
     });

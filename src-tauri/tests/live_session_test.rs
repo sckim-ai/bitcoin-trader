@@ -12,6 +12,13 @@ fn setup_db() -> Connection {
     conn.execute_batch(include_str!("../migrations/002_users.sql")).unwrap();
     conn.execute_batch(include_str!("../migrations/006_live_trading.sql")).unwrap();
     conn.execute_batch(include_str!("../migrations/007_preset_context.sql")).unwrap();
+    conn.execute_batch(include_str!("../migrations/008_session_signal_log.sql")).unwrap();
+    conn.execute_batch(include_str!("../migrations/009_baseline_metrics.sql")).unwrap();
+    conn.execute_batch(include_str!("../migrations/010_pending_orders.sql")).unwrap();
+    conn.execute_batch(include_str!("../migrations/011_safety_limits.sql")).unwrap();
+    conn.execute_batch(include_str!("../migrations/012_order_caps.sql")).unwrap();
+    conn.execute_batch(include_str!("../migrations/013_pending_cost_basis.sql")).unwrap();
+    conn.execute_batch(include_str!("../migrations/014_upbit_accounts.sql")).unwrap();
     conn
 }
 
@@ -20,12 +27,12 @@ fn full_session_lifecycle() {
     let conn = setup_db();
 
     // 1) preset 생성
-    let pid = live_repo::insert_preset(&conn, 1, "V3-OptA", "V3", "{}", "manual", None, None, None, None, None).unwrap();
+    let pid = live_repo::insert_preset(&conn, 1, "V3-OptA", "V3", "{}", "manual", None, None, None, None, None, None, None).unwrap();
 
     // 2) 세션 3개 생성
-    let s1 = live_repo::insert_session(&conn, 1, "S1", pid, "KRW-ETH", "paper", 1_000_000.0, "2026-04-24T00:00:00Z").unwrap();
-    let s2 = live_repo::insert_session(&conn, 1, "S2", pid, "KRW-ETH", "paper", 1_000_000.0, "2026-04-24T00:00:00Z").unwrap();
-    let s3 = live_repo::insert_session(&conn, 1, "S3", pid, "KRW-ETH", "paper", 1_000_000.0, "2026-04-24T00:00:00Z").unwrap();
+    let s1 = live_repo::insert_session(&conn, 1, "S1", pid, "KRW-ETH", "paper", 1_000_000.0, "2026-04-24T00:00:00Z", None).unwrap();
+    let s2 = live_repo::insert_session(&conn, 1, "S2", pid, "KRW-ETH", "paper", 1_000_000.0, "2026-04-24T00:00:00Z", None).unwrap();
+    let s3 = live_repo::insert_session(&conn, 1, "S3", pid, "KRW-ETH", "paper", 1_000_000.0, "2026-04-24T00:00:00Z", None).unwrap();
 
     // 3) 각각 running으로 전환
     for sid in [s1, s2, s3] {
@@ -63,25 +70,24 @@ fn full_session_lifecycle() {
 }
 
 #[test]
-fn diff_insert_idempotency() {
-    // 동일한 trade 시퀀스를 재삽입하려 할 때, count_completed_trades를 활용해
-    // "이미 처리된 것까지는 건너뛰기"를 호출자가 보장해야 한다는 계약을 확인.
+fn replace_paper_trades_preserves_real() {
+    // session_engine now wipes paper trades each cycle and re-inserts from
+    // the current SimulationResult so live_trades stays byte-aligned with
+    // the latest signal_log. Real-trade rows (is_real=1) must NOT be touched
+    // — they represent actual Upbit fills and survive across cycles.
     let conn = setup_db();
-    let pid = live_repo::insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None).unwrap();
-    let sid = live_repo::insert_session(&conn, 1, "S", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z").unwrap();
+    let pid = live_repo::insert_preset(&conn, 1, "p", "V3", "{}", "manual", None, None, None, None, None, None, None).unwrap();
+    let sid = live_repo::insert_session(&conn, 1, "S", pid, "KRW-ETH", "paper", 1e6, "2026-04-24T00:00:00Z", None).unwrap();
 
-    // 1차 사이클: trade 1쌍 완료
-    let existing_before = live_repo::count_completed_trades(&conn, sid).unwrap();
-    assert_eq!(existing_before, 0);
-
+    // Three rows: paper buy, paper sell, real buy.
     live_repo::insert_trade(&conn, sid, "2026-04-24T01:00:00Z", "buy",  3e6,   0.3, 450.0, "buy",  None, None, false).unwrap();
     live_repo::insert_trade(&conn, sid, "2026-04-24T02:00:00Z", "sell", 3.1e6, 0.3, 465.0, "sell", Some(3.0), Some(3.0), false).unwrap();
+    live_repo::insert_trade(&conn, sid, "2026-04-24T05:00:00Z", "buy",  3.2e6, 0.3, 480.0, "buy",  None, None, true).unwrap();
+    assert_eq!(live_repo::list_trades(&conn, sid).unwrap().len(), 3);
 
-    assert_eq!(live_repo::count_completed_trades(&conn, sid).unwrap(), 1);
-
-    // 2차 사이클: 시뮬레이션이 같은 trade 1개를 재생성한다고 가정
-    let simulated_completed: usize = 1;
-    let existing = live_repo::count_completed_trades(&conn, sid).unwrap();
-    let new_to_insert = simulated_completed.saturating_sub(existing);
-    assert_eq!(new_to_insert, 0, "재실행 시 신규 없음");
+    // Replace paper rows; real survives.
+    live_repo::delete_paper_trades(&conn, sid).unwrap();
+    let remaining = live_repo::list_trades(&conn, sid).unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert!(remaining[0].is_real);
 }

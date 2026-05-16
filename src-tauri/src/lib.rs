@@ -16,7 +16,7 @@ pub mod commands;
 
 #[cfg(feature = "tauri-app")]
 mod app {
-    use crate::commands::{auth, data, simulation, optimization, trading, migration, notification, live_trading};
+    use crate::commands::{auth, data, simulation, optimization, trading, migration, notification, live_trading, upbit_keys, upbit_accounts, history};
     use crate::db::schema;
     use crate::state::AppState;
     use crate::strategies::StrategyRegistry;
@@ -108,6 +108,22 @@ mod app {
                         }
                     }
                 });
+
+                // Live cycle log stream → frontend "live:log" event. Mirrors the
+                // tick broker pattern. Lines come from `live_log!` / file_logger
+                // and reach LiveTradingPage's LiveLogPanel in real time.
+                let log_handle = app.handle().clone();
+                let mut log_rx = crate::core::file_logger::init_log_broadcast();
+                tauri::async_runtime::spawn(async move {
+                    use tauri::Emitter;
+                    loop {
+                        match log_rx.recv().await {
+                            Ok(line) => { let _ = log_handle.emit("live:log", &line); }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(_) => break,
+                        }
+                    }
+                });
                 Ok(())
             })
             .invoke_handler(tauri::generate_handler![
@@ -126,8 +142,7 @@ mod app {
                 optimization::delete_optimization_run,
                 trading::get_current_price,
                 trading::get_balance,
-                trading::manual_buy,
-                trading::manual_sell,
+                trading::manual_market_order,
                 trading::get_position,
                 trading::start_auto_trading,
                 trading::stop_auto_trading,
@@ -142,15 +157,34 @@ mod app {
                 migration::migrate_from_csv,
                 notification::save_notification_config,
                 notification::test_notification,
+                notification::test_trade_notifications,
                 live_trading::save_preset,
                 live_trading::list_presets,
                 live_trading::delete_preset,
                 live_trading::create_session,
+                live_trading::set_session_order_cap,
                 live_trading::list_sessions,
                 live_trading::start_session,
                 live_trading::stop_session,
                 live_trading::delete_session,
                 live_trading::list_session_trades,
+                live_trading::get_session_signal_log,
+                live_trading::toggle_session_mode,
+                live_trading::emergency_stop_all_real,
+                live_trading::list_pending_orders,
+                upbit_keys::save_upbit_keys,
+                upbit_keys::get_upbit_key_status,
+                upbit_keys::clear_upbit_keys,
+                upbit_keys::test_upbit_connection,
+                upbit_accounts::list_upbit_accounts,
+                upbit_accounts::add_upbit_account,
+                upbit_accounts::test_upbit_account_connection,
+                upbit_accounts::update_upbit_account,
+                upbit_accounts::delete_upbit_account,
+                upbit_accounts::set_upbit_account_enabled,
+                history::list_real_trades,
+                history::real_pnl_summary,
+                history::export_real_trades_csv,
             ])
             .run(tauri::generate_context!())
             .expect("error while running tauri application");

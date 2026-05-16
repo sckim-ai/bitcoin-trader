@@ -15,9 +15,9 @@ pub fn seconds_until_next_hour() -> u64 {
 }
 
 pub fn create_public_client() -> UpbitClient {
-    let ak = std::env::var("UPBIT_ACCESS_KEY").unwrap_or_default();
-    let sk = std::env::var("UPBIT_SECRET_KEY").unwrap_or_default();
-    UpbitClient::new(ak, sk)
+    // Public endpoints (ticker price, candles) work without credentials.
+    // Authenticated callers use upbit_client_for(account_id) instead.
+    UpbitClient::new(String::new(), String::new())
 }
 
 /// Run the live scheduler forever. Wakes at every hour boundary, iterates all
@@ -31,7 +31,8 @@ pub async fn run_loop(
     use tauri::Emitter;
 
     let registry = StrategyRegistry::new();
-    let client = create_public_client();
+    // run_session_cycle now reads candles directly from DB; no Upbit client
+    // needed here. (`create_public_client` is still pub for other callers.)
 
     loop {
         if cancel.load(Ordering::Relaxed) { break; }
@@ -65,7 +66,7 @@ pub async fn run_loop(
                 }
             };
 
-            match session_engine::run_session_cycle(&db, &client, &session, &preset, &registry).await {
+            match session_engine::run_session_cycle(&db, &session, &preset, &registry).await {
                 Ok(out) => {
                     let _ = app_handle.emit("session:update", &out);
                 }

@@ -2,9 +2,11 @@ import type {
   Preset,
   LiveSession,
   LiveTrade,
+  SignalEvent,
   CreateSessionArgs,
   SavePresetArgs,
   TickData,
+  UpbitAccount,
 } from "../types";
 
 const isTauri = "__TAURI_INTERNALS__" in window;
@@ -29,14 +31,76 @@ export const deletePreset = (id: number): Promise<void> =>
 export const listSessions = (): Promise<LiveSession[]> => invoke("list_sessions");
 export const createSession = (args: CreateSessionArgs): Promise<number> =>
   invoke("create_session", { args });
+/// Update or clear a session's BUY cap (KRW). Pass null to clear (full balance).
+export const setSessionOrderCap = (id: number, max_order_krw: number | null): Promise<void> =>
+  invoke("set_session_order_cap", { id, maxOrderKrw: max_order_krw });
 export const startSession = (id: number): Promise<void> =>
   invoke("start_session", { id });
 export const stopSession = (id: number): Promise<void> =>
   invoke("stop_session", { id });
 export const deleteSession = (id: number): Promise<void> =>
   invoke("delete_session", { id });
+/// Promote a paper session to real (or demote back to paper). Backend enforces
+/// multi-real=1 and verifies API keys are configured before promoting.
+export const toggleSessionMode = (id: number, mode: "paper" | "real"): Promise<void> =>
+  invoke("toggle_session_mode", { args: { id, mode } });
+/// Stop all running real sessions. Returns the affected session ids.
+/// Mode stays 'real' — only status flips to 'stopped'.
+export const emergencyStopAllReal = (): Promise<number[]> =>
+  invoke("emergency_stop_all_real");
+
+export interface PendingOrderRow {
+  uuid: string;
+  session_id: number;
+  side: "bid" | "ask";
+  market: string;
+  ord_type: string;
+  target_price: number | null;
+  requested: number;
+  placed_at: string;
+  last_checked: string | null;
+}
+
+/// Wait-state pending orders across all sessions. Empty in steady state.
+export const listPendingOrders = (): Promise<PendingOrderRow[]> =>
+  invoke("list_pending_orders");
 export const listSessionTrades = (sessionId: number): Promise<LiveTrade[]> =>
   invoke("list_session_trades", { sessionId });
+/// Persisted per-candle signal_log for the session — written by session_engine
+/// each cycle so it always matches the trades in live_trades.
+export const getSessionSignalLog = (sessionId: number): Promise<SignalEvent[]> =>
+  invoke("get_session_signal_log", { sessionId });
+
+// ─── Upbit Accounts ───
+export const listUpbitAccounts = (): Promise<UpbitAccount[]> =>
+  invoke("list_upbit_accounts");
+
+export interface AddAccountArgs {
+  label: string;
+  access_key: string;
+  secret_key: string;
+}
+export const addUpbitAccount = (args: AddAccountArgs): Promise<UpbitAccount> =>
+  invoke("add_upbit_account", { args });
+
+export interface UpdateAccountArgs {
+  id: number;
+  label?: string;
+  access_key?: string;
+  secret_key?: string;
+}
+export const updateUpbitAccount = (args: UpdateAccountArgs): Promise<void> =>
+  invoke("update_upbit_account", { args });
+
+export const deleteUpbitAccount = (id: number): Promise<void> =>
+  invoke("delete_upbit_account", { id });
+
+export const setUpbitAccountEnabled = (id: number, enabled: boolean): Promise<void> =>
+  invoke("set_upbit_account_enabled", { id, enabled });
+
+/** Returns the number of currencies the account holds — proves keys work. */
+export const testUpbitAccountConnection = (id: number): Promise<number> =>
+  invoke("test_upbit_account_connection", { id });
 
 // ─── Market Ticks ───
 /// Subscribe to market ticks. Returns an unsubscribe function.

@@ -1,17 +1,18 @@
 import { useState } from "react";
 import {
   Settings,
-  Key,
+  Wallet,
   Database,
   Info,
   Save,
-  Check,
   Bell,
   Send,
 } from "lucide-react";
+import { Link } from "react-router-dom";
 import {
   saveNotificationConfig,
   testNotification,
+  testTradeNotifications,
 } from "../lib/api";
 import { Card, CardContent, CardHeader } from "../components/ui/Card";
 import { Input } from "../components/ui/Input";
@@ -19,10 +20,7 @@ import { Select } from "../components/ui/Select";
 import { Button } from "../components/ui/Button";
 
 export default function SettingsPage() {
-  const [accessKey, setAccessKey] = useState("");
-  const [secretKey, setSecretKey] = useState("");
   const [defaultStrategy, setDefaultStrategy] = useState("V3");
-  const [saved, setSaved] = useState(false);
 
   // Notification state
   const [fcmServerKey, setFcmServerKey] = useState("");
@@ -42,13 +40,6 @@ export default function SettingsPage() {
     { key: "V3", name: "Regime Adaptive" },
   ];
 
-  const handleSaveKeys = () => {
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
-  };
-
-  const token = localStorage.getItem("auth_token") || "";
-
   const handleSaveNotif = async (channel: string) => {
     try {
       let config = "";
@@ -63,9 +54,10 @@ export default function SettingsPage() {
         config = JSON.stringify({ bot_token: telegramBotToken, chat_id: telegramChatId });
         enabled = telegramEnabled;
       }
-      await saveNotificationConfig(token, channel, config, enabled);
-      setNotifStatus((s) => ({ ...s, [channel]: "Saved!" }));
-      setTimeout(() => setNotifStatus((s) => ({ ...s, [channel]: "" })), 2000);
+      await saveNotificationConfig(channel, config, enabled);
+      const note = enabled ? "Saved!" : "Saved (disabled — 알림 안 감)";
+      setNotifStatus((s) => ({ ...s, [channel]: note }));
+      setTimeout(() => setNotifStatus((s) => ({ ...s, [channel]: "" })), 3000);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       setNotifStatus((s) => ({ ...s, [channel]: `Error: ${msg}` }));
@@ -74,13 +66,27 @@ export default function SettingsPage() {
 
   const handleTestNotif = async (channel: string) => {
     try {
-      setNotifStatus((s) => ({ ...s, [`${channel}_test`]: "Sending..." }));
-      await testNotification(token, channel);
-      setNotifStatus((s) => ({ ...s, [`${channel}_test`]: "Sent!" }));
-      setTimeout(() => setNotifStatus((s) => ({ ...s, [`${channel}_test`]: "" })), 2000);
+      setNotifStatus((s) => ({ ...s, [`${channel}_test`]: "⏳ Sending..." }));
+      const result = await testNotification(channel);
+      // backend가 채널별 구체 결과 문자열 반환 (e.g. "Discord 전송 완료 — 채널을 확인하세요.")
+      setNotifStatus((s) => ({ ...s, [`${channel}_test`]: `✓ ${result}` }));
+      setTimeout(() => setNotifStatus((s) => ({ ...s, [`${channel}_test`]: "" })), 5000);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      setNotifStatus((s) => ({ ...s, [`${channel}_test`]: `Error: ${msg}` }));
+      setNotifStatus((s) => ({ ...s, [`${channel}_test`]: `✗ ${msg}` }));
+      // 에러는 사용자가 복사해 디버깅할 수 있도록 자동 사라지지 않게
+    }
+  };
+
+  const handleTestTrades = async () => {
+    try {
+      setNotifStatus((s) => ({ ...s, trade_test: "⏳ 6개 메시지 전송 중..." }));
+      const result = await testTradeNotifications();
+      setNotifStatus((s) => ({ ...s, trade_test: `✓ ${result}` }));
+      setTimeout(() => setNotifStatus((s) => ({ ...s, trade_test: "" })), 8000);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setNotifStatus((s) => ({ ...s, trade_test: `✗ ${msg}` }));
     }
   };
 
@@ -91,33 +97,21 @@ export default function SettingsPage() {
         Settings
       </h1>
 
-      {/* API Keys */}
+      {/* Upbit 계정 — Accounts 페이지로 이동 */}
       <Card>
         <CardHeader className="flex items-center gap-2">
-          <Key size={16} className="text-amber-500" />
-          <h2 className="text-sm font-semibold text-zinc-300">API Keys</h2>
+          <Wallet size={16} className="text-amber-500" />
+          <h2 className="text-sm font-semibold text-zinc-300">Upbit 계정</h2>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-xs text-zinc-500">Upbit API keys for live trading. Keys are stored locally.</p>
-          <Input
-            label="Access Key"
-            type="password"
-            passwordToggle
-            value={accessKey}
-            onChange={(e) => setAccessKey(e.target.value)}
-            placeholder="Enter Upbit Access Key"
-          />
-          <Input
-            label="Secret Key"
-            type="password"
-            passwordToggle
-            value={secretKey}
-            onChange={(e) => setSecretKey(e.target.value)}
-            placeholder="Enter Upbit Secret Key"
-          />
-          <Button onClick={handleSaveKeys} size="sm">
-            {saved ? <><Check size={14} /> Saved</> : <><Save size={14} /> Save Keys</>}
-          </Button>
+        <CardContent>
+          <p className="text-zinc-400 text-sm">
+            계정 관리는 Accounts 페이지로 이동했습니다.
+          </p>
+          <Link to="/accounts">
+            <Button className="mt-3" size="sm" variant="secondary">
+              Accounts 페이지로 이동
+            </Button>
+          </Link>
         </CardContent>
       </Card>
 
@@ -184,6 +178,30 @@ export default function SettingsPage() {
             <Input type="password" passwordToggle value={telegramBotToken} onChange={(e) => setTelegramBotToken(e.target.value)} placeholder="Bot Token" />
             <Input value={telegramChatId} onChange={(e) => setTelegramChatId(e.target.value)} placeholder="Chat ID" />
           </NotifSection>
+
+          {/* Trade-notification format check — 6개 변형을 enabled 채널에 모두 전송 */}
+          <div className="pt-4 border-t border-zinc-800">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div>
+                <h3 className="text-xs font-semibold text-zinc-300">Trade notifications 포맷 검증</h3>
+                <p className="text-[11px] text-zinc-500 mt-0.5">
+                  매수대기·매도대기·매수·매도·주문등록·늦은체결 6종을 enabled 채널로 전송 (~5초)
+                </p>
+              </div>
+              <Button onClick={handleTestTrades} size="sm" variant="secondary">
+                <Send size={12} /> Send 6 samples
+              </Button>
+            </div>
+            {notifStatus.trade_test && (
+              <p className={`text-xs mt-2 break-all ${
+                notifStatus.trade_test.startsWith("✓") ? "text-emerald-400"
+                : notifStatus.trade_test.startsWith("✗") ? "text-rose-400"
+                : "text-sky-400"
+              }`}>
+                {notifStatus.trade_test}
+              </p>
+            )}
+          </div>
         </CardContent>
       </Card>
 
@@ -249,15 +267,29 @@ function NotifSection({
       <div className="space-y-2">
         {children}
       </div>
-      <div className="flex gap-2 items-center">
+      <div className="flex flex-wrap gap-2 items-center">
         <Button onClick={onSave} size="sm" variant="secondary">
           <Save size={12} /> Save
         </Button>
         <Button onClick={onTest} size="sm" variant="ghost">
           <Send size={12} /> Test
         </Button>
-        {status && <span className="text-xs text-emerald-400">{status}</span>}
-        {testStatus && <span className="text-xs text-sky-400">{testStatus}</span>}
+        {status && (
+          <span className={`text-xs ${status.includes("disabled") ? "text-amber-400" : "text-emerald-400"}`}>
+            {status}
+          </span>
+        )}
+        {testStatus && (
+          <span
+            className={`text-xs break-all ${
+              testStatus.startsWith("✓") ? "text-emerald-400"
+              : testStatus.startsWith("✗") ? "text-rose-400"
+              : "text-sky-400"
+            }`}
+          >
+            {testStatus}
+          </span>
+        )}
       </div>
     </div>
   );

@@ -22,6 +22,7 @@ import { Download, History, Play, Rocket, Square, Trash2 } from "lucide-react";
 import type { ParetoSolution, StrategyInfo } from "../types";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
+import { confirmDialog } from "../components/ui/ConfirmDialog";
 
 // Every metric the NSGA-II evaluator produces — shown as a column in the
 // Solutions table regardless of which were selected as objectives. Keys
@@ -204,10 +205,26 @@ export default function OptimizationPage() {
       setError("Cannot delete a currently-running optimization.");
       return;
     }
-    const ok = window.confirm(
-      `Delete Run #${run.id} (${run.strategy_key}, ${run.population_size}×${run.generations})?\n\n` +
-      `All stored generations for this run will be permanently removed.\nThis action cannot be undone.`
-    );
+    const ok = await confirmDialog({
+      title: "Optimization Run 삭제",
+      severity: "danger",
+      confirmLabel: "삭제",
+      body: (
+        <div className="space-y-2">
+          <p>
+            <Badge variant="amber">#{run.id}</Badge>{" "}
+            <span className="text-zinc-300">{run.strategy_key}</span>
+            <span className="text-zinc-500"> · </span>
+            <span className="text-zinc-300 font-data">
+              {run.population_size}×{run.generations}
+            </span>
+          </p>
+          <p className="text-xs text-zinc-500">
+            저장된 모든 generation 이 영구 삭제되며, 되돌릴 수 없습니다.
+          </p>
+        </div>
+      ),
+    });
     if (!ok) return;
     try {
       await deleteOptimizationRun(run.id);

@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Button } from "../ui/Button";
 import { Input } from "../ui/Input";
-import type { Preset } from "../../types";
+import type { Preset, UpbitAccount } from "../../types";
+import { listUpbitAccounts } from "../../lib/live";
 
 interface Props {
   presets: Preset[];
@@ -11,6 +12,8 @@ interface Props {
     preset_id: number;
     market: string;
     initial_capital: number;
+    max_order_krw: number | null;
+    upbit_account_id: number | null;
   }) => void;
 }
 
@@ -19,6 +22,20 @@ export default function NewSessionDialog({ presets, onClose, onSubmit }: Props) 
   const [labelTouched, setLabelTouched] = useState(false);
   const [presetId, setPresetId] = useState<number | null>(null);
   const [capital, setCapital] = useState(1_000_000);
+  const [orderCap, setOrderCap] = useState<string>("");
+  const [accounts, setAccounts] = useState<UpbitAccount[]>([]);
+  const [accountId, setAccountId] = useState<number | null>(null);
+
+  useEffect(() => {
+    listUpbitAccounts()
+      .then((list) => {
+        setAccounts(list);
+        // 선택 가능한 계정이 딱 하나면 자동 선택
+        const selectable = list.filter((a) => a.enabled && !a.has_running_session);
+        if (selectable.length === 1) setAccountId(selectable[0].id);
+      })
+      .catch(() => {/* 무시 — 계정 없는 경우 */});
+  }, []);
 
   useEffect(() => {
     if (presets.length > 0 && presetId == null) setPresetId(presets[0].id);
@@ -31,13 +48,13 @@ export default function NewSessionDialog({ presets, onClose, onSubmit }: Props) 
     }
   }, [presetId, presets, labelTouched]);
 
-  const canSubmit = label.trim().length > 0 && presetId != null && capital > 0;
+  const canSubmit = label.trim().length > 0 && presetId != null && capital > 0 && accountId != null;
   const selectedPreset = presetId != null ? presets.find((p) => p.id === presetId) : null;
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 w-96 space-y-4">
-        <h3 className="text-lg font-semibold text-zinc-100">New Paper Session</h3>
+        <h3 className="text-lg font-semibold text-zinc-100">New Session</h3>
 
         <div>
           <label className="text-xs text-zinc-500 block mb-1">
@@ -53,6 +70,34 @@ export default function NewSessionDialog({ presets, onClose, onSubmit }: Props) 
         <div>
           <label className="text-xs text-zinc-500 block mb-1">Market</label>
           <p className="text-sm text-zinc-300">KRW-ETH <span className="text-zinc-600">(fixed)</span></p>
+        </div>
+
+        <div>
+          <label className="text-xs text-zinc-500 block mb-1">
+            Upbit Account <span className="text-rose-400">*</span>
+          </label>
+          {accounts.length === 0 ? (
+            <p className="text-xs text-amber-400">
+              등록된 계정이 없습니다. Accounts 페이지에서 먼저 등록하세요.
+            </p>
+          ) : (
+            <select
+              value={accountId ?? ""}
+              onChange={(e) => setAccountId(e.target.value === "" ? null : Number(e.target.value))}
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200"
+            >
+              <option value="">— 계정 선택 —</option>
+              {accounts.map((a) => {
+                const unavailable = !a.enabled || a.has_running_session;
+                return (
+                  <option key={a.id} value={a.id} disabled={unavailable}>
+                    {a.label}
+                    {!a.enabled ? " (비활성)" : a.has_running_session ? " (실행 중)" : ""}
+                  </option>
+                );
+              })}
+            </select>
+          )}
         </div>
 
         <div>
@@ -77,17 +122,48 @@ export default function NewSessionDialog({ presets, onClose, onSubmit }: Props) 
           <Input type="number" value={capital} onChange={(e) => setCapital(Number(e.target.value))} />
         </div>
 
-        <div className="text-xs text-zinc-500 bg-zinc-800/40 rounded-lg p-3">
-          <div className="text-zinc-400 mb-1">Simulation window</div>
+        <div>
+          <label className="text-xs text-zinc-500 block mb-1">
+            BUY Cap (KRW) <span className="text-zinc-600">— optional, blank = full balance</span>
+          </label>
+          <Input
+            type="number"
+            value={orderCap}
+            placeholder="비워두면 계좌 전체 KRW로 매수"
+            onChange={(e) => setOrderCap(e.target.value)}
+          />
+          <p className="text-[11px] text-zinc-600 mt-1">
+            REAL 모드에서 매 매수가 min(잔고, 한도) × 0.9995로 제한됩니다. 매도는 항상 보유 전량.
+          </p>
+        </div>
+
+        <div className="text-xs text-zinc-500 bg-zinc-800/40 rounded-lg p-3 space-y-2">
           <div>
-            {selectedPreset?.since_ts && selectedPreset?.until_ts
-              ? <span className="text-zinc-200">{selectedPreset.since_ts} ~ now</span>
-              : <span className="text-zinc-500">프리셋의 시작 시점부터 현재까지 리플레이</span>
-            }
+            <div className="text-zinc-400 mb-1">Backtest window</div>
+            <div>
+              {selectedPreset?.since_ts
+                ? <span className="text-zinc-200">
+                    {selectedPreset.since_ts}{selectedPreset.until_ts ? ` ~ ${selectedPreset.until_ts}` : ""}
+                  </span>
+                : <span className="text-zinc-500">프리셋에 기간 정보 없음</span>
+              }
+            </div>
           </div>
-          <div className="text-zinc-600 mt-1">
-            Start를 누르면 이 구간을 즉시 리플레이해 현재 포지션·시그널을 계산하고,
-            이후 매 정시에 최신 봉으로 갱신합니다.
+          {selectedPreset?.baseline_return != null && (
+            <div>
+              <div className="text-zinc-400 mb-1">Baseline (preset)</div>
+              <div className="text-zinc-200">
+                <span className={selectedPreset.baseline_return >= 0 ? "text-emerald-400" : "text-rose-400"}>
+                  {selectedPreset.baseline_return >= 0 ? "+" : ""}{selectedPreset.baseline_return.toFixed(2)}%
+                </span>
+                {selectedPreset.baseline_trades != null && (
+                  <span className="text-zinc-500"> · {selectedPreset.baseline_trades} trades</span>
+                )}
+              </div>
+            </div>
+          )}
+          <div className="text-zinc-600 pt-1 border-t border-zinc-800">
+            Start 시점부터 발생한 매매만 별도로 누적해 baseline과 비교 가능하게 표시합니다.
           </div>
         </div>
 
@@ -96,11 +172,14 @@ export default function NewSessionDialog({ presets, onClose, onSubmit }: Props) 
           <Button
             disabled={!canSubmit}
             onClick={() => {
+              const capParsed = orderCap.trim() === "" ? null : Number(orderCap);
               onSubmit({
                 label: label.trim(),
                 preset_id: presetId!,
                 market: "KRW-ETH",
                 initial_capital: capital,
+                max_order_krw: capParsed != null && capParsed > 0 ? capParsed : null,
+                upbit_account_id: accountId,
               });
             }}
           >

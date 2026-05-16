@@ -199,31 +199,13 @@ export async function getCurrentPrice(market: string): Promise<number> {
   return data.price;
 }
 
-export async function getBalance(currency: string): Promise<number> {
-  if (isTauri) return tauriInvoke("get_balance", { currency });
+export async function getBalance(accountId: number, currency: string): Promise<number> {
+  if (isTauri) return tauriInvoke("get_balance", { accountId, currency });
   throw new Error("Balance check is only available in desktop mode");
 }
 
-export async function manualBuy(
-  market: string,
-  volume: number,
-  price: number
-): Promise<string> {
-  if (isTauri) return tauriInvoke("manual_buy", { market, volume, price });
-  throw new Error("Manual trading is only available in desktop mode");
-}
-
-export async function manualSell(
-  market: string,
-  volume: number,
-  price: number
-): Promise<string> {
-  if (isTauri) return tauriInvoke("manual_sell", { market, volume, price });
-  throw new Error("Manual trading is only available in desktop mode");
-}
-
-export async function getPosition(market: string): Promise<PositionInfo> {
-  if (isTauri) return tauriInvoke("get_position", { market });
+export async function getPosition(accountId: number, market: string): Promise<PositionInfo> {
+  if (isTauri) return tauriInvoke("get_position", { accountId, market });
   return httpGet("/api/trading/position", { market });
 }
 
@@ -276,23 +258,140 @@ export async function deleteUser(token: string, userId: number): Promise<void> {
 }
 
 // --- Notification API ---
+// Aligned with the desktop single-user model: no auth token required.
+// Backend uses user_id=1 (default admin) like every other command.
 
 export async function saveNotificationConfig(
-  token: string,
   channel: string,
   config: string,
   enabled: boolean
 ): Promise<void> {
-  if (isTauri) return tauriInvoke("save_notification_config", { token, channel, config, enabled });
+  if (isTauri) return tauriInvoke("save_notification_config", { channel, config, enabled });
   throw new Error("Notification config via PWA not yet implemented");
 }
 
-export async function testNotification(
-  token: string,
-  channel: string
-): Promise<string> {
-  if (isTauri) return tauriInvoke("test_notification", { token, channel });
+export async function testNotification(channel: string): Promise<string> {
+  if (isTauri) return tauriInvoke("test_notification", { channel });
   throw new Error("Notification test via PWA not yet implemented");
+}
+
+/// Send the 6 trade-notification variants (buy_ready / sell_ready /
+/// buy / sell / order_registered / late_fill) so the user can verify
+/// formatting in their channel. Goes through the regular runtime path
+/// (enabled=0 channels are skipped).
+export async function testTradeNotifications(): Promise<string> {
+  if (isTauri) return tauriInvoke("test_trade_notifications");
+  throw new Error("Trade-notification test is desktop-only");
+}
+
+// --- Upbit Keys (OS keychain via Tauri) ---
+
+export interface UpbitKeyStatus {
+  has_access: boolean;
+  has_secret: boolean;
+  /** "keyring" / "env" / "none" — tells the UI where active keys come from. */
+  source: "keyring" | "env" | "none";
+  /** Surfaced when keyring read fails so we can show "why" instead of just "Not configured". */
+  access_error: string | null;
+  secret_error: string | null;
+}
+
+export async function saveUpbitKeys(accessKey: string, secretKey: string): Promise<void> {
+  if (isTauri) return tauriInvoke("save_upbit_keys", { accessKey, secretKey });
+  throw new Error("Upbit key management is desktop-only (uses OS keychain)");
+}
+
+export async function getUpbitKeyStatus(): Promise<UpbitKeyStatus> {
+  if (isTauri) return tauriInvoke("get_upbit_key_status");
+  throw new Error("Upbit key management is desktop-only");
+}
+
+export async function clearUpbitKeys(): Promise<void> {
+  if (isTauri) return tauriInvoke("clear_upbit_keys");
+  throw new Error("Upbit key management is desktop-only");
+}
+
+/** Returns the number of currencies the account holds — proves keys work. */
+export async function testUpbitConnection(): Promise<number> {
+  if (isTauri) return tauriInvoke("test_upbit_connection");
+  throw new Error("Upbit key management is desktop-only");
+}
+
+// --- Manual market order (post-4A user trigger) ---
+
+export interface ManualOrderArgs {
+  market: string;
+  side: "buy" | "sell";
+  /** "market" (즉시 체결) or "limit" (지정가 등록 — 미체결 가능). */
+  ord_type?: "market" | "limit";
+  /** market+buy or limit+buy (volume 미지정 시 limit_price로 자동 환산). */
+  krw_amount?: number;
+  /** sell+any 또는 limit+buy(volume 직접 지정). */
+  volume?: number;
+  /** limit 주문일 때만 필수. */
+  limit_price?: number;
+  /** Attribute the resulting fill to a session — writes is_real=1 row to live_trades. */
+  session_id?: number;
+}
+
+export interface ManualOrderResult {
+  uuid: string;
+  state: string;
+  executed_volume: number;
+  side: string;
+  market: string;
+}
+
+export async function manualMarketOrder(args: ManualOrderArgs): Promise<ManualOrderResult> {
+  if (isTauri) return tauriInvoke("manual_market_order", { args });
+  throw new Error("Manual order is desktop-only");
+}
+
+// --- Trading history (Phase 4C) ---
+
+export interface HistoryFilter {
+  session_id?: number;
+  /** RFC3339 or YYYY-MM-DD prefix; inclusive lower bound. */
+  since?: string;
+  /** Exclusive upper bound. */
+  until?: string;
+}
+
+export interface HistoryTrade {
+  id: number;
+  session_id: number;
+  ts: string;
+  side: "buy" | "sell";
+  price: number;
+  volume: number;
+  fee: number;
+  signal: string;
+  pnl: number | null;
+  pnl_pct: number | null;
+  is_real: boolean;
+}
+
+export interface DailyBucket {
+  /** "YYYY-MM-DD" in UTC. */
+  date: string;
+  trade_count: number;
+  realized_pnl: number;
+  avg_pnl_pct: number;
+}
+
+export async function listRealTrades(filter: HistoryFilter): Promise<HistoryTrade[]> {
+  if (isTauri) return tauriInvoke("list_real_trades", { filter });
+  throw new Error("history queries are desktop-only in Phase 4C");
+}
+
+export async function realPnlSummary(filter: HistoryFilter): Promise<DailyBucket[]> {
+  if (isTauri) return tauriInvoke("real_pnl_summary", { filter });
+  throw new Error("history queries are desktop-only in Phase 4C");
+}
+
+export async function exportRealTradesCsv(filter: HistoryFilter): Promise<string> {
+  if (isTauri) return tauriInvoke("export_real_trades_csv", { filter });
+  throw new Error("CSV export is desktop-only in Phase 4C");
 }
 
 // --- Migration API ---
@@ -312,9 +411,10 @@ export async function migrateFromCsv(csvDir: string): Promise<MigrationResult> {
 
 export async function startAutoTrading(
   market: string,
-  strategyKey: string
+  strategyKey: string,
+  accountId: number
 ): Promise<string> {
-  if (isTauri) return tauriInvoke("start_auto_trading", { market, strategyKey });
+  if (isTauri) return tauriInvoke("start_auto_trading", { market, strategyKey, accountId });
   throw new Error("Auto-trading is only available in desktop mode");
 }
 

@@ -43,6 +43,19 @@ tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 futures-util = "0.3"
 async-stream = "0.3"
 
+# OS-native secret store for Upbit API keys. keyring v3 ships a mock backend
+# by default — platform-specific features must be enabled to actually hit the
+# OS credential store, otherwise set_password is a no-op and get_password
+# always returns NoEntry. Picked per target so cross-OS builds stay clean.
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
+
 [dev-dependencies]
 approx = "0.5"
 tempfile = "3"
