@@ -104,3 +104,89 @@ pub async fn test_upbit_account_connection(id: i64) -> Result<usize, String> {
         .map_err(|e| format!("Upbit API rejected: {e}"))?;
     Ok(balances.len())
 }
+
+fn guard_no_running(conn: &rusqlite::Connection, account_id: i64) -> Result<(), String> {
+    let n = upbit_accounts_repo::count_running_sessions(conn, account_id)
+        .map_err(|e| e.to_string())?;
+    if n > 0 {
+        return Err("실행 중인 세션이 있습니다. 먼저 세션을 중지하세요.".into());
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+pub struct UpdateAccountArgs {
+    pub id: i64,
+    pub label: Option<String>,
+    pub access_key: Option<String>,
+    pub secret_key: Option<String>,
+}
+
+#[tauri::command]
+pub async fn update_upbit_account(
+    args: UpdateAccountArgs,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let id = args.id;
+
+    // 라벨만 바꾸는 경우는 가드 없이 허용 (주문 경로 영향 없음).
+    if let Some(label) = args.label.as_deref() {
+        let trimmed = label.trim();
+        if trimmed.is_empty() {
+            return Err("라벨은 비어 있을 수 없습니다.".into());
+        }
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        upbit_accounts_repo::update_label(&conn, id, trimmed).map_err(|e| {
+            if e.to_string().to_lowercase().contains("unique") {
+                "같은 이름의 계정이 이미 있습니다.".to_string()
+            } else {
+                e.to_string()
+            }
+        })?;
+    }
+
+    // 키 변경은 running 세션 가드 + 새 키 검증.
+    if args.access_key.is_some() || args.secret_key.is_some() {
+        {
+            let conn = state.db.lock().map_err(|e| e.to_string())?;
+            guard_no_running(&conn, id)?;
+        } // lock 해제 후 keyring/await
+
+        let new_access = args
+            .access_key
+            .ok_or_else(|| "키 갱신 시 access_key/secret_key를 모두 보내세요.".to_string())?;
+        let new_secret = args
+            .secret_key
+            .ok_or_else(|| "키 갱신 시 access_key/secret_key를 모두 보내세요.".to_string())?;
+        save_keys_for(id, new_access.trim(), new_secret.trim())?;
+        let client = upbit_client_for(id)?;
+        if let Err(e) = client.get_all_balances().await {
+            return Err(format!("새 키 저장됨, 그러나 Upbit 연결 실패: {e}"));
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_upbit_account_enabled(
+    id: i64,
+    enabled: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    if !enabled {
+        guard_no_running(&conn, id)?;
+    }
+    upbit_accounts_repo::set_enabled(&conn, id, enabled).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn delete_upbit_account(id: i64, state: State<'_, AppState>) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    guard_no_running(&conn, id)?;
+    upbit_accounts_repo::delete_account(&conn, id).map_err(|e| e.to_string())?;
+    drop(conn);
+    delete_keys_for(id);
+    Ok(())
+}
