@@ -15,18 +15,9 @@ pub struct PositionInfo {
     pub pnl_pct: f64,
 }
 
-fn create_client() -> Result<UpbitClient, String> {
-    // Resolution order: OS keyring → env var → error.
-    // See commands::upbit_keys::load_upbit_keys.
-    crate::commands::upbit_keys::upbit_client_or_err()
-}
-
 /// Public ticker/candle endpoints don't need auth — empty keys are fine.
-/// Still tries keyring/env first so an existing UpbitClient instance is reused
-/// transparently for both public and authed endpoints.
 fn create_public_client() -> UpbitClient {
-    let (access, secret, _) = crate::commands::upbit_keys::load_upbit_keys();
-    UpbitClient::new(access.unwrap_or_default(), secret.unwrap_or_default())
+    UpbitClient::new(String::new(), String::new())
 }
 
 #[tauri::command]
@@ -39,32 +30,9 @@ pub async fn get_current_price(market: String) -> Result<f64, String> {
 }
 
 #[tauri::command]
-pub async fn get_balance(currency: String) -> Result<f64, String> {
-    let client = create_client()?;
-    client
-        .get_balance(&currency)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn manual_buy(market: String, volume: f64, price: f64) -> Result<String, String> {
-    let client = create_client()?;
-    let result = client
-        .place_limit_buy(&market, volume, price)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(result.to_string())
-}
-
-#[tauri::command]
-pub async fn manual_sell(market: String, volume: f64, price: f64) -> Result<String, String> {
-    let client = create_client()?;
-    let result = client
-        .place_limit_sell(&market, volume, price)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(result.to_string())
+pub async fn get_balance(account_id: i64, currency: String) -> Result<f64, String> {
+    let client = crate::commands::upbit_keys::upbit_client_for(account_id)?;
+    client.get_balance(&currency).await.map_err(|e| e.to_string())
 }
 
 // ─── Manual market orders (post-4A, user-triggered) ────────────────────────
@@ -111,7 +79,7 @@ pub async fn manual_market_order(
     args: ManualOrderArgs,
     state: State<'_, AppState>,
 ) -> Result<ManualOrderResult, String> {
-    let client = create_client()?;
+    let client = crate::commands::upbit_keys::upbit_client_or_err()?;
 
     // 4 cases: (market, buy) / (market, sell) / (limit, buy) / (limit, sell).
     // Limit-buy derives volume from KRW / target_price so the user only enters
@@ -242,7 +210,8 @@ pub async fn manual_market_order(
 }
 
 #[tauri::command]
-pub fn get_position(market: String, state: State<'_, AppState>) -> Result<PositionInfo, String> {
+pub fn get_position(account_id: i64, market: String, state: State<'_, AppState>) -> Result<PositionInfo, String> {
+    let _ = account_id; // reserved for future multi-account position lookup
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     let result = conn.query_row(
         "SELECT status, COALESCE(buy_price, 0), COALESCE(buy_volume, 0) FROM positions WHERE market = ?1 AND user_id = 1",

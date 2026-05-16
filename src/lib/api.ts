@@ -199,31 +199,13 @@ export async function getCurrentPrice(market: string): Promise<number> {
   return data.price;
 }
 
-export async function getBalance(currency: string): Promise<number> {
-  if (isTauri) return tauriInvoke("get_balance", { currency });
+export async function getBalance(accountId: number, currency: string): Promise<number> {
+  if (isTauri) return tauriInvoke("get_balance", { accountId, currency });
   throw new Error("Balance check is only available in desktop mode");
 }
 
-export async function manualBuy(
-  market: string,
-  volume: number,
-  price: number
-): Promise<string> {
-  if (isTauri) return tauriInvoke("manual_buy", { market, volume, price });
-  throw new Error("Manual trading is only available in desktop mode");
-}
-
-export async function manualSell(
-  market: string,
-  volume: number,
-  price: number
-): Promise<string> {
-  if (isTauri) return tauriInvoke("manual_sell", { market, volume, price });
-  throw new Error("Manual trading is only available in desktop mode");
-}
-
-export async function getPosition(market: string): Promise<PositionInfo> {
-  if (isTauri) return tauriInvoke("get_position", { market });
+export async function getPosition(accountId: number, market: string): Promise<PositionInfo> {
+  if (isTauri) return tauriInvoke("get_position", { accountId, market });
   return httpGet("/api/trading/position", { market });
 }
 

@@ -56,9 +56,11 @@ export const useTradingStore = create<TradingState>((set, get) => ({
   },
 
   fetchBalance: async () => {
+    // TODO: tradingStore has no account context — pass 0 to fall back to
+    // legacy single-key path (upbit_client_for(0) resolves via keyring/env).
     try {
-      const krw = await getBalance("KRW");
-      const btc = await getBalance("BTC");
+      const krw = await getBalance(0, "KRW");
+      const btc = await getBalance(0, "BTC");
       set({ balanceKrw: krw, balanceCoin: btc });
     } catch (e) {
       get().addLog(`[ERROR] Balance fetch: ${e}`);
@@ -66,8 +68,9 @@ export const useTradingStore = create<TradingState>((set, get) => ({
   },
 
   fetchPosition: async (market: string) => {
+    // TODO: tradingStore has no account context — pass 0 as placeholder.
     try {
-      const pos = await getPosition(market);
+      const pos = await getPosition(0, market);
       set({ position: pos });
     } catch (e) {
       get().addLog(`[ERROR] Position fetch: ${e}`);
