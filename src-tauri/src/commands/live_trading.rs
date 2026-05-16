@@ -98,6 +98,11 @@ pub struct CreateSessionArgs {
     /// Optional per-session BUY cap in KRW. None / omitted → use full balance.
     #[serde(default)]
     pub max_order_krw: Option<f64>,
+    /// 이 세션이 실주문을 보낼 Upbit 계정. 신규 세션은 필수 (Some 강제).
+    /// Option으로 두는 이유는 serde가 누락된 필드를 None으로 받게 해서
+    /// 백엔드 한 곳에서 명시적 에러를 던지기 위함.
+    #[serde(default)]
+    pub upbit_account_id: Option<i64>,
 }
 
 /// Normalize a preset's since_ts ("YYYY-MM-DD" or RFC3339) to an RFC3339
@@ -122,6 +127,19 @@ pub fn create_session(
 ) -> Result<i64, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
 
+    let account_id = args.upbit_account_id
+        .ok_or_else(|| "Upbit 계정을 선택하세요. (Accounts 페이지에서 먼저 등록)".to_string())?;
+    let acc = crate::db::upbit_accounts_repo::get_account(&conn, account_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("계정 {account_id}이 존재하지 않습니다."))?;
+    if !acc.enabled {
+        return Err("선택한 계정이 비활성화 상태입니다.".into());
+    }
+    let (has_a, has_s) = crate::commands::upbit_keys::has_keys_for(account_id);
+    if !has_a || !has_s {
+        return Err("선택한 계정에 API 키가 설정되지 않았습니다.".into());
+    }
+
     let preset = live_repo::get_preset(&conn, args.preset_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("preset {} not found", args.preset_id))?;
@@ -143,7 +161,7 @@ pub fn create_session(
         "paper",
         args.initial_capital,
         &start_ts,
-        None, // upbit_account_id — Task 10 will thread through from args
+        Some(account_id),
     )
     .map_err(|e| e.to_string())?;
 
@@ -277,18 +295,30 @@ pub fn toggle_session_mode(
         return Err(format!("invalid mode: {mode} (expected 'paper' or 'real')"));
     }
 
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+
     if mode == "real" {
-        // Verify keys exist before promotion.
-        let (a, s, _) = crate::commands::upbit_keys::load_upbit_keys();
-        if a.is_none() || s.is_none() {
-            return Err(
-                "Upbit API keys not configured. Open Settings → Upbit API Keys to save them first."
-                    .into(),
-            );
+        // Account-based validation: verify the session's linked account exists,
+        // is enabled, and has API keys loaded.
+        let session = live_repo::get_session(&conn, args.id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("session {} not found", args.id))?;
+        let account_id = session
+            .upbit_account_id
+            .ok_or_else(|| "이 세션에는 Upbit 계정이 연결되어 있지 않습니다.".to_string())?;
+        let acc = crate::db::upbit_accounts_repo::get_account(&conn, account_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "계정이 삭제되었습니다.".to_string())?;
+        if !acc.enabled {
+            return Err("계정이 비활성화 상태입니다.".into());
         }
+        let (ha, hs) = crate::commands::upbit_keys::has_keys_for(account_id);
+        if !ha || !hs {
+            return Err("계정 API 키가 설정되지 않았습니다.".into());
+        }
+        // 부분 유니크 인덱스가 같은 계정 두 번째 running real을 DB 레벨에서 차단.
     }
 
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
     live_repo::set_session_mode(&conn, args.id, mode).map_err(|e| e.to_string())?;
     Ok(())
 }
