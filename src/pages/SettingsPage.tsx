@@ -1,25 +1,18 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   Settings,
-  Key,
+  Wallet,
   Database,
   Info,
   Save,
   Bell,
   Send,
-  Trash2,
-  Wifi,
 } from "lucide-react";
-import { confirmDialog } from "../components/ui/ConfirmDialog";
+import { Link } from "react-router-dom";
 import {
   saveNotificationConfig,
   testNotification,
   testTradeNotifications,
-  saveUpbitKeys,
-  getUpbitKeyStatus,
-  clearUpbitKeys,
-  testUpbitConnection,
-  type UpbitKeyStatus,
 } from "../lib/api";
 import { Card, CardContent, CardHeader } from "../components/ui/Card";
 import { Input } from "../components/ui/Input";
@@ -27,23 +20,7 @@ import { Select } from "../components/ui/Select";
 import { Button } from "../components/ui/Button";
 
 export default function SettingsPage() {
-  const [accessKey, setAccessKey] = useState("");
-  const [secretKey, setSecretKey] = useState("");
   const [defaultStrategy, setDefaultStrategy] = useState("V3");
-  const [keyStatus, setKeyStatus] = useState<UpbitKeyStatus | null>(null);
-  const [keyMsg, setKeyMsg] = useState<{ tone: "ok" | "err" | "info"; text: string } | null>(null);
-  const [keyBusy, setKeyBusy] = useState(false);
-
-  const refreshKeyStatus = async () => {
-    try {
-      setKeyStatus(await getUpbitKeyStatus());
-    } catch (e) {
-      // PWA fallback path — keep the badge in null/loading state but surface
-      // the reason once so a developer can spot the protocol mismatch.
-      console.warn("getUpbitKeyStatus failed:", e);
-    }
-  };
-  useEffect(() => { refreshKeyStatus(); }, []);
 
   // Notification state
   const [fcmServerKey, setFcmServerKey] = useState("");
@@ -62,66 +39,6 @@ export default function SettingsPage() {
   const strategies = [
     { key: "V3", name: "Regime Adaptive" },
   ];
-
-  const handleSaveKeys = async () => {
-    if (!accessKey.trim() || !secretKey.trim()) {
-      setKeyMsg({ tone: "err", text: "Both keys are required." });
-      return;
-    }
-    setKeyBusy(true);
-    setKeyMsg(null);
-    try {
-      await saveUpbitKeys(accessKey.trim(), secretKey.trim());
-      setAccessKey("");
-      setSecretKey("");
-      await refreshKeyStatus();
-      setKeyMsg({ tone: "ok", text: "Saved to OS keychain." });
-    } catch (e) {
-      setKeyMsg({ tone: "err", text: `Save failed: ${e instanceof Error ? e.message : String(e)}` });
-    } finally {
-      setKeyBusy(false);
-    }
-  };
-
-  const handleTestKeys = async () => {
-    setKeyBusy(true);
-    setKeyMsg({ tone: "info", text: "Testing connection..." });
-    try {
-      const n = await testUpbitConnection();
-      setKeyMsg({ tone: "ok", text: `Connection OK — account holds ${n} currencies.` });
-    } catch (e) {
-      setKeyMsg({ tone: "err", text: `Test failed: ${e instanceof Error ? e.message : String(e)}` });
-    } finally {
-      setKeyBusy(false);
-    }
-  };
-
-  const handleClearKeys = async () => {
-    const ok = await confirmDialog({
-      title: "Upbit API 키 삭제",
-      severity: "warning",
-      confirmLabel: "삭제",
-      body: (
-        <div className="space-y-2">
-          <p>OS 키체인에 저장된 Upbit API 키를 삭제합니다.</p>
-          <p className="text-xs text-zinc-500">
-            다시 입력하기 전까지 라이브 트레이딩과 잔고 조회가 중단됩니다.
-          </p>
-        </div>
-      ),
-    });
-    if (!ok) return;
-    setKeyBusy(true);
-    try {
-      await clearUpbitKeys();
-      await refreshKeyStatus();
-      setKeyMsg({ tone: "ok", text: "Keys cleared." });
-    } catch (e) {
-      setKeyMsg({ tone: "err", text: `Clear failed: ${e instanceof Error ? e.message : String(e)}` });
-    } finally {
-      setKeyBusy(false);
-    }
-  };
 
   const handleSaveNotif = async (channel: string) => {
     try {
@@ -180,87 +97,21 @@ export default function SettingsPage() {
         Settings
       </h1>
 
-      {/* Upbit API Keys — OS keychain via Tauri keyring crate */}
+      {/* Upbit 계정 — Accounts 페이지로 이동 */}
       <Card>
         <CardHeader className="flex items-center gap-2">
-          <Key size={16} className="text-amber-500" />
-          <h2 className="text-sm font-semibold text-zinc-300">Upbit API Keys</h2>
+          <Wallet size={16} className="text-amber-500" />
+          <h2 className="text-sm font-semibold text-zinc-300">Upbit 계정</h2>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-xs text-zinc-500">
-            실거래 자동매매에 사용. OS 키체인(Windows Credential Manager / macOS Keychain / Linux Secret Service)에 저장되며 코드/설정 파일에는 남지 않습니다.
+        <CardContent>
+          <p className="text-zinc-400 text-sm">
+            계정 관리는 Accounts 페이지로 이동했습니다.
           </p>
-
-          {/* Status badge + diagnostic */}
-          <div className="space-y-1 text-xs">
-            <div className="flex items-center gap-2">
-              {keyStatus == null ? (
-                <span className="text-zinc-500">Loading…</span>
-              ) : keyStatus.has_access && keyStatus.has_secret ? (
-                <span className="px-2 py-0.5 rounded bg-emerald-900/40 text-emerald-300 border border-emerald-800">
-                  Configured · source: <span className="font-data">{keyStatus.source}</span>
-                </span>
-              ) : (
-                <span className="px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-700">
-                  Not configured
-                </span>
-              )}
-            </div>
-            {keyStatus?.access_error && (
-              <div className="text-rose-400 break-all">access read error: {keyStatus.access_error}</div>
-            )}
-            {keyStatus?.secret_error && (
-              <div className="text-rose-400 break-all">secret read error: {keyStatus.secret_error}</div>
-            )}
-          </div>
-
-          <Input
-            label="Access Key"
-            type="password"
-            passwordToggle
-            value={accessKey}
-            onChange={(e) => setAccessKey(e.target.value)}
-            placeholder={keyStatus?.has_access ? "(saved — enter new value to replace)" : "Enter Upbit Access Key"}
-            disabled={keyBusy}
-          />
-          <Input
-            label="Secret Key"
-            type="password"
-            passwordToggle
-            value={secretKey}
-            onChange={(e) => setSecretKey(e.target.value)}
-            placeholder={keyStatus?.has_secret ? "(saved — enter new value to replace)" : "Enter Upbit Secret Key"}
-            disabled={keyBusy}
-          />
-
-          <div className="flex flex-wrap gap-2">
-            <Button onClick={handleSaveKeys} size="sm" disabled={keyBusy || (!accessKey && !secretKey)}>
-              <Save size={14} /> Save
+          <Link to="/accounts">
+            <Button className="mt-3" size="sm" variant="secondary">
+              Accounts 페이지로 이동
             </Button>
-            <Button
-              onClick={handleTestKeys}
-              size="sm"
-              variant="secondary"
-              disabled={keyBusy || !keyStatus?.has_access || !keyStatus?.has_secret}
-            >
-              <Wifi size={14} /> Test connection
-            </Button>
-            <Button
-              onClick={handleClearKeys}
-              size="sm"
-              variant="danger"
-              disabled={keyBusy || !keyStatus?.has_access}
-            >
-              <Trash2 size={14} /> Clear
-            </Button>
-          </div>
-
-          {keyMsg && (
-            <p className={`text-xs ${
-              keyMsg.tone === "ok" ? "text-emerald-400" :
-              keyMsg.tone === "err" ? "text-rose-400" : "text-zinc-400"
-            }`}>{keyMsg.text}</p>
-          )}
+          </Link>
         </CardContent>
       </Card>
 

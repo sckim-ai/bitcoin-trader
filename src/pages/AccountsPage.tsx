@@ -3,6 +3,7 @@ import { Users, Plus } from "lucide-react";
 import { Button } from "../components/ui/Button";
 import { AccountCard } from "../components/accounts/AccountCard";
 import { AddAccountDialog } from "../components/accounts/AddAccountDialog";
+import { EditAccountDialog } from "../components/accounts/EditAccountDialog";
 import { confirmDialog } from "../components/ui/ConfirmDialog";
 import {
   listUpbitAccounts,
@@ -16,6 +17,7 @@ export default function AccountsPage() {
   const [accounts, setAccounts] = useState<UpbitAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddDialog, setShowAddDialog] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
 
   // Per-account test state
   const [testing, setTesting] = useState<Record<number, boolean>>({});
@@ -48,8 +50,8 @@ export default function AccountsPage() {
     }
   };
 
-  const handleEdit = (_id: number) => {
-    // Task 18에서 EditAccountDialog 연결
+  const handleEdit = (id: number) => {
+    setEditingId(id);
   };
 
   const handleToggleEnabled = async (id: number, next: boolean) => {
@@ -133,6 +135,18 @@ export default function AccountsPage() {
         onClose={() => setShowAddDialog(false)}
         onAdded={refresh}
       />
+
+      {editingId !== null && (() => {
+        const acc = accounts.find((a) => a.id === editingId);
+        if (!acc) return null;
+        return (
+          <EditAccountDialog
+            account={acc}
+            onClose={() => setEditingId(null)}
+            onUpdated={refresh}
+          />
+        );
+      })()}
     </div>
   );
 }

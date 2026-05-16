@@ -8,6 +8,7 @@ import {
   Users,
   LogOut,
   History,
+  Wallet,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { onOptimizationEvent } from "./lib/api";
@@ -22,6 +23,7 @@ import OptimizationPage from "./pages/OptimizationPage";
 import LiveTradingPage from "./pages/LiveTradingPage";
 import HistoryPage from "./pages/HistoryPage";
 import SettingsPage from "./pages/SettingsPage";
+import AccountsPage from "./pages/AccountsPage";
 import AdminPage from "./pages/AdminPage";
 import { useAuthStore } from "./stores/authStore";
 import { Button } from "./components/ui/Button";
@@ -33,6 +35,7 @@ const NAV_ITEMS = [
   { to: "/optimization", icon: TrendingUp, label: "Optimize" },
   { to: "/live", icon: Zap, label: "Live" },
   { to: "/history", icon: History, label: "History" },
+  { to: "/accounts", icon: Wallet, label: "Accounts" },
   { to: "/settings", icon: Settings, label: "Settings" },
 ] as const;
 
@@ -247,6 +250,7 @@ function App() {
             <Route path="/optimization" element={<OptimizationPage />} />
             <Route path="/live" element={<LiveTradingPage />} />
             <Route path="/history" element={<HistoryPage />} />
+            <Route path="/accounts" element={<AccountsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route
               path="/admin"
