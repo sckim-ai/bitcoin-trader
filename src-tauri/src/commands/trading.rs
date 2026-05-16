@@ -79,7 +79,17 @@ pub async fn manual_market_order(
     args: ManualOrderArgs,
     state: State<'_, AppState>,
 ) -> Result<ManualOrderResult, String> {
-    let client = crate::commands::upbit_keys::upbit_client_or_err()?;
+    // Resolve account_id from the session, then drop the DB lock before any await.
+    let account_id = {
+        let sid = args.session_id.ok_or("session_id is required for manual orders")?;
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        let session = crate::db::live_repo::get_session(&conn, sid)
+            .map_err(|e| format!("세션 조회 실패: {e}"))?
+            .ok_or_else(|| format!("세션을 찾을 수 없습니다: {sid}"))?;
+        session.upbit_account_id
+            .ok_or("세션에 Upbit 계정이 연결되지 않았습니다.")?
+    }; // conn lock released here
+    let client = crate::commands::upbit_keys::upbit_client_for(account_id)?;
 
     // 4 cases: (market, buy) / (market, sell) / (limit, buy) / (limit, sell).
     // Limit-buy derives volume from KRW / target_price so the user only enters
