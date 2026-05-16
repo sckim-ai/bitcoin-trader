@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ShoppingCart, AlertTriangle } from "lucide-react";
 import { Card, CardContent, CardHeader } from "../ui/Card";
 import { Button } from "../ui/Button";
@@ -24,6 +24,22 @@ interface Props {
 export default function ManualOrderCard({ sessions, onPlaced }: Props) {
   const realSessions = sessions.filter((s) => s.mode === "real");
   const hasReal = realSessions.length > 0;
+
+  // 1개면 자동 선택, 2개 이상이면 사용자가 직접 선택
+  const [selectedSessionId, setSelectedSessionId] = useState<number | null>(
+    realSessions.length === 1 ? realSessions[0].id : null,
+  );
+
+  useEffect(() => {
+    if (realSessions.length === 1 && selectedSessionId === null) {
+      setSelectedSessionId(realSessions[0].id);
+    } else if (realSessions.length === 0) {
+      setSelectedSessionId(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [realSessions.length]);
+
+  const activeSession = realSessions.find((s) => s.id === selectedSessionId) ?? null;
 
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [ordType, setOrdType] = useState<"market" | "limit">("market");
@@ -139,9 +155,12 @@ export default function ManualOrderCard({ sessions, onPlaced }: Props) {
           )}
           <div className="flex items-center gap-2 text-xs">
             <span className="text-zinc-500">대상 세션</span>
-            {hasReal ? (
+            {activeSession ? (
               <Badge variant="amber">
-                #{realSessions[0].id} {realSessions[0].label}
+                #{activeSession.id} {activeSession.label}
+                {activeSession.account_label && (
+                  <span className="ml-1 text-zinc-400">[{activeSession.account_label}]</span>
+                )}
               </Badge>
             ) : (
               <span className="text-zinc-600">미부착 (history 미귀속)</span>
@@ -166,7 +185,7 @@ export default function ManualOrderCard({ sessions, onPlaced }: Props) {
         krw_amount: side === "buy" ? amt : undefined,
         volume: side === "sell" ? amt : undefined,
         limit_price: ordType === "limit" ? limitPx : undefined,
-        session_id: hasReal ? realSessions[0].id : undefined,
+        session_id: selectedSessionId ?? undefined,
       });
       setResult(r);
       onPlaced?.(r);
@@ -179,17 +198,33 @@ export default function ManualOrderCard({ sessions, onPlaced }: Props) {
 
   return (
     <Card>
-      <CardHeader className="flex items-center gap-2">
+      <CardHeader className="flex flex-wrap items-center gap-2">
         <ShoppingCart size={16} className="text-amber-500" />
         <h3 className="text-sm font-semibold text-zinc-300">Manual Order (KRW-ETH)</h3>
-        {hasReal ? (
-          <span className="ml-2 text-[10px] text-zinc-500">
-            ↳ session #{realSessions[0].id} {realSessions[0].label}
-          </span>
-        ) : (
+        {realSessions.length === 0 && (
           <span className="ml-2 text-[10px] text-zinc-600">
             ↳ no real session — fill won't attribute to history
           </span>
+        )}
+        {realSessions.length === 1 && activeSession && (
+          <span className="ml-2 text-[10px] text-zinc-500">
+            ↳ session #{activeSession.id} {activeSession.label}
+            {activeSession.account_label && ` [${activeSession.account_label}]`}
+          </span>
+        )}
+        {realSessions.length >= 2 && (
+          <select
+            value={selectedSessionId ?? ""}
+            onChange={(e) => setSelectedSessionId(e.target.value === "" ? null : Number(e.target.value))}
+            className="ml-2 bg-zinc-800 border border-zinc-700 rounded-md px-2 py-0.5 text-xs text-zinc-200"
+          >
+            <option value="">— 세션 선택 —</option>
+            {realSessions.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.account_label ? `[${s.account_label}] ` : ""}{s.label}
+              </option>
+            ))}
+          </select>
         )}
       </CardHeader>
       <CardContent className="space-y-3">
@@ -285,7 +320,12 @@ export default function ManualOrderCard({ sessions, onPlaced }: Props) {
 
           <Button
             onClick={handlePlace}
-            disabled={submitting || !amount || (ordType === "limit" && !limitPrice)}
+            disabled={
+              submitting ||
+              !amount ||
+              (ordType === "limit" && !limitPrice) ||
+              (realSessions.length >= 2 && selectedSessionId === null)
+            }
             variant={side === "buy" ? "success" : "danger"}
           >
             {submitting ? "Placing..." : `${side === "buy" ? "Buy" : "Sell"} (${ordType})`}

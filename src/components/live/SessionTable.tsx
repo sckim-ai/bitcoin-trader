@@ -85,7 +85,20 @@ export default function SessionTable({
                   />
                 </label>
               </td>
-              <td className="font-medium text-zinc-200">{s.label}</td>
+              <td className="font-medium text-zinc-200">
+                <div className="flex flex-col gap-0.5 leading-tight">
+                  <span>{s.label}</span>
+                  {s.account_label ? (
+                    <Badge variant="default" className="self-start text-[10px] px-1 py-0">
+                      [{s.account_label}]
+                    </Badge>
+                  ) : s.upbit_account_id !== null ? (
+                    <Badge variant="default" className="self-start text-[10px] px-1 py-0 opacity-50">
+                      [삭제됨]
+                    </Badge>
+                  ) : null}
+                </div>
+              </td>
               <td className="text-zinc-400">{s.market}</td>
               <td>
                 <div className="flex flex-col gap-0.5 leading-tight">
