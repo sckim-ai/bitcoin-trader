@@ -194,6 +194,17 @@ export interface SavePresetArgs {
   baseline_trades?: number;
 }
 
+export interface UpbitAccount {
+  id: number;
+  user_id: number;
+  label: string;
+  enabled: boolean;
+  created_at: string;
+  has_access_key: boolean;
+  has_secret_key: boolean;
+  has_running_session: boolean;
+}
+
 export interface LiveSession {
   id: number;
   user_id: number;
@@ -219,6 +230,8 @@ export interface LiveSession {
   max_daily_trades: number;
   /** Per-session BUY cap in KRW. null = no cap (full balance). */
   max_order_krw: number | null;
+  upbit_account_id: number | null;
+  account_label: string | null;
   created_at: string;
 }
 
@@ -243,6 +256,7 @@ export interface CreateSessionArgs {
   initial_capital: number;
   /** Optional per-session BUY cap in KRW. Null/omitted = no cap. */
   max_order_krw?: number | null;
+  upbit_account_id?: number | null;
 }
 
 export interface SessionCycleOutput {

@@ -6,6 +6,7 @@ import type {
   CreateSessionArgs,
   SavePresetArgs,
   TickData,
+  UpbitAccount,
 } from "../types";
 
 const isTauri = "__TAURI_INTERNALS__" in window;
@@ -69,6 +70,37 @@ export const listSessionTrades = (sessionId: number): Promise<LiveTrade[]> =>
 /// each cycle so it always matches the trades in live_trades.
 export const getSessionSignalLog = (sessionId: number): Promise<SignalEvent[]> =>
   invoke("get_session_signal_log", { sessionId });
+
+// ─── Upbit Accounts ───
+export const listUpbitAccounts = (): Promise<UpbitAccount[]> =>
+  invoke("list_upbit_accounts");
+
+export interface AddAccountArgs {
+  label: string;
+  access_key: string;
+  secret_key: string;
+}
+export const addUpbitAccount = (args: AddAccountArgs): Promise<UpbitAccount> =>
+  invoke("add_upbit_account", { args });
+
+export interface UpdateAccountArgs {
+  id: number;
+  label?: string;
+  access_key?: string;
+  secret_key?: string;
+}
+export const updateUpbitAccount = (args: UpdateAccountArgs): Promise<void> =>
+  invoke("update_upbit_account", { args });
+
+export const deleteUpbitAccount = (id: number): Promise<void> =>
+  invoke("delete_upbit_account", { id });
+
+export const setUpbitAccountEnabled = (id: number, enabled: boolean): Promise<void> =>
+  invoke("set_upbit_account_enabled", { id, enabled });
+
+/** Returns the number of currencies the account holds — proves keys work. */
+export const testUpbitAccountConnection = (id: number): Promise<number> =>
+  invoke("test_upbit_account_connection", { id });
 
 // ─── Market Ticks ───
 /// Subscribe to market ticks. Returns an unsubscribe function.
