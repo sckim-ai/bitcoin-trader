@@ -275,6 +275,7 @@ pub fn get_position(market: String, state: State<'_, AppState>) -> Result<Positi
 pub async fn start_auto_trading(
     market: String,
     strategy_key: String,
+    account_id: i64,
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
@@ -326,6 +327,7 @@ pub async fn start_auto_trading(
             market_clone,
             params,
             cancel_clone,
+            account_id,
         )
         .await;
     });

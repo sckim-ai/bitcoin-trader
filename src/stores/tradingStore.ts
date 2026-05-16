@@ -26,7 +26,7 @@ interface TradingState {
   fetchPosition: (market: string) => Promise<void>;
   startMonitoring: (market: string) => void;
   stopMonitoring: () => void;
-  startAutoTrading: (market: string, strategyKey: string) => Promise<void>;
+  startAutoTrading: (market: string, strategyKey: string, accountId: number) => Promise<void>;
   stopAutoTrading: () => Promise<void>;
   fetchAutoTradingStatus: () => Promise<void>;
   addLog: (msg: string) => void;
@@ -98,9 +98,9 @@ export const useTradingStore = create<TradingState>((set, get) => ({
     get().addLog("[INFO] Monitoring stopped");
   },
 
-  startAutoTrading: async (market: string, strategyKey: string) => {
+  startAutoTrading: async (market: string, strategyKey: string, accountId: number) => {
     try {
-      const msg = await apiStartAutoTrading(market, strategyKey);
+      const msg = await apiStartAutoTrading(market, strategyKey, accountId);
       set({ isAutoTrading: true });
       get().addLog(`[SUCCESS] ${msg}`);
       // Also start monitoring for price display

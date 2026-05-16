@@ -15,10 +15,9 @@ pub fn seconds_until_next_hour() -> u64 {
 }
 
 pub fn create_public_client() -> UpbitClient {
-    // Public endpoints work without keys; still resolve via keyring → env so
-    // authed endpoints reuse the same client when keys ARE configured.
-    let (access, secret, _) = crate::commands::upbit_keys::load_upbit_keys();
-    UpbitClient::new(access.unwrap_or_default(), secret.unwrap_or_default())
+    // Public endpoints (ticker price, candles) work without credentials.
+    // Authenticated callers use upbit_client_for(account_id) instead.
+    UpbitClient::new(String::new(), String::new())
 }
 
 /// Run the live scheduler forever. Wakes at every hour boundary, iterates all

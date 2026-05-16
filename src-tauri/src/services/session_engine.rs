@@ -321,7 +321,10 @@ async fn real_reconcile_step<'a>(
     cbv: &mut Option<f64>,
     last_signal: &mut String,
 ) -> Result<(), BoxErr> {
-    let upbit = crate::commands::upbit_keys::upbit_client_or_err()
+    let account_id = session
+        .upbit_account_id
+        .ok_or_else(|| -> BoxErr { "session has no upbit_account_id (run migration?)".into() })?;
+    let upbit = crate::commands::upbit_keys::upbit_client_for(account_id)
         .map_err(|e| -> BoxErr { e.into() })?;
 
     // 0a. Daily safety circuit breakers — DISABLED by user request (post-4A.7).
@@ -344,10 +347,13 @@ async fn real_reconcile_step<'a>(
     if let Err(e) = cancel_session_wait_orders(db, &upbit, session.id).await {
         crate::live_log!("[realcycle] session={} cancel-wait error: {e}", session.id);
     }
-    // 0c. Reconcile any remaining wait-state orders (other sessions or
-    //     newly arrived state changes). Done orders are surfaced to
-    //     live_trades by the tracker. (Phase 4A.5)
-    if let Err(e) = crate::services::pending_order_tracker::reconcile_pending_orders(db, &upbit).await {
+    // 0c. Reconcile any remaining wait-state orders for THIS session only.
+    //     Per-session reconcile ensures account A's client never touches
+    //     account B's order UUIDs. Done orders are surfaced to live_trades
+    //     by the tracker. (Phase 4A.5 → Task 12 migration)
+    if let Err(e) = crate::services::pending_order_tracker::reconcile_pending_orders_for_session(
+        db, session.id, account_id,
+    ).await {
         crate::live_log!("[realcycle] session={} pending reconcile error: {e}", session.id);
     }
 

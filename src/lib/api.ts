@@ -429,9 +429,10 @@ export async function migrateFromCsv(csvDir: string): Promise<MigrationResult> {
 
 export async function startAutoTrading(
   market: string,
-  strategyKey: string
+  strategyKey: string,
+  accountId: number
 ): Promise<string> {
-  if (isTauri) return tauriInvoke("start_auto_trading", { market, strategyKey });
+  if (isTauri) return tauriInvoke("start_auto_trading", { market, strategyKey, accountId });
   throw new Error("Auto-trading is only available in desktop mode");
 }
 
