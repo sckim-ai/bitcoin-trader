@@ -73,6 +73,22 @@ async fn reconcile_inner(
                 // All DB work in a sub-scope so the MutexGuard drops before
                 // the notifier .await below (CLAUDE.md: MutexGuard !Send).
                 let executed = order.executed_volume_f64();
+                // Actual volume-weighted average fill price from the Upbit
+                // response (trades array → paid_fee fallback). Falls back to
+                // the stored limit (p.target_price) only when neither source
+                // has usable data. Last resort: order.price (limit) parsed as
+                // f64. Computed BEFORE the DB scope so the notification path
+                // below can use the same value as what's booked.
+                let fee_rate = 0.0005;
+                let target_price = p.target_price.unwrap_or(0.0);
+                let booked_price = order
+                    .avg_fill_price(fee_rate)
+                    .or(if target_price > 0.0 { Some(target_price) } else { None })
+                    .unwrap_or_else(|| {
+                        order.price.as_deref()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0.0)
+                    });
                 let (notifier, session_for_notif) = {
                     let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
                     // Atomic CAS: claim ownership of this row. await 경계에서 lock이
@@ -92,11 +108,6 @@ async fn reconcile_inner(
                         continue;
                     }
                     if executed > 0.0 {
-                        let target_price = p.target_price.unwrap_or(0.0);
-                        let booked_price = if target_price > 0.0 { target_price } else {
-                            order.price.as_deref().and_then(|s| s.parse().ok()).unwrap_or(0.0)
-                        };
-                        let fee_rate = 0.0005;
                         let session = live_repo::get_session(&conn, p.session_id)
                             .map_err(|e| -> BoxErr { e.to_string().into() })?;
                         // Late fill ts → strategy의 transition 봉 timestamp.
@@ -203,7 +214,9 @@ async fn reconcile_inner(
                     p.uuid, executed);
 
                 if executed > 0.0 {
-                    let price = p.target_price.unwrap_or(0.0);
+                    // Use the same booked_price that was inserted into
+                    // live_trades above — guarantees DB row and Discord
+                    // message agree.
                     let label = session_for_notif.as_ref()
                         .map(|s| s.label.clone())
                         .unwrap_or_else(|| format!("session {}", p.session_id));
@@ -215,16 +228,16 @@ async fn reconcile_inner(
                     };
                     if p.side == "bid" {
                         notifier.notify_trade_embed(
-                            "buy", &p.market, price, executed, None, &ctx, true,
+                            "buy", &p.market, booked_price, executed, None, &ctx, true,
                         ).await;
                     } else if p.side == "ask" {
                         let buy_price = session_for_notif.as_ref()
                             .and_then(|s| s.current_buy_price).unwrap_or(0.0);
                         let pnl_pct = if buy_price > 0.0 {
-                            (price - buy_price) / buy_price * 100.0
+                            (booked_price - buy_price) / buy_price * 100.0
                         } else { 0.0 };
                         notifier.notify_trade_embed(
-                            "sell", &p.market, price, executed, Some(pnl_pct), &ctx, true,
+                            "sell", &p.market, booked_price, executed, Some(pnl_pct), &ctx, true,
                         ).await;
                     }
                 }

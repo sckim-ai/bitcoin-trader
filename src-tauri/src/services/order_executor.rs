@@ -1,13 +1,20 @@
-//! Split-order execution — direct port of legacy
-//! `LiveTradingService.ExecuteSplitBuy/SellAsync` (LiveTradingService.cs:1427-1555).
+//! Order execution — split for market orders (port of legacy
+//! `LiveTradingService.ExecuteSplitBuy/SellAsync`), single for maker-queue
+//! limit orders.
 //!
-//! Why split: large single-shot market orders eat through several order-book
-//! levels and pay an avoidable slippage premium. Splitting into three chunks
-//! with 2s gaps gives the book time to refill at tighter spreads.
+//! Why split for market: large single-shot market orders eat through several
+//! orderbook levels and pay an avoidable slippage premium. Splitting into
+//! three chunks with 2s gaps gives the book to refill at tighter spreads.
 //!
-//! Constants are intentionally identical to the legacy values so the first
-//! real run matches the validated paper-vs-real behaviour from the C#
-//! deployment.
+//! Why single for limit: under the maker-queue policy (BUY at best_bid, SELL
+//! at best_ask) the limit price never crosses the spread, so there is no
+//! sweep to mitigate. Split has no benefit and adds latency / partial-fill
+//! complexity. `execute_split_buy/sell` therefore short-circuits to a single
+//! chunk whenever `target_price > 0`.
+//!
+//! Constants are intentionally identical to the legacy values so the (now
+//! unused) market path matches the validated paper-vs-real behaviour from
+//! the C# deployment if we ever re-enable it.
 
 use crate::api::upbit::{OrderResponse, UpbitClient};
 use std::time::Duration;
@@ -64,15 +71,20 @@ pub fn split_sell_chunks(total_volume: f64, current_price: f64) -> Vec<f64> {
         .collect()
 }
 
-/// Execute a split BUY. If `target_price > 0` → limit orders at target_price
-/// (post-4A.7 default policy: peg at the last bar's close). If 0 → market.
+/// Execute a BUY. `target_price > 0` → single maker-queue limit (no split:
+/// limit never sweeps so chunking is pointless). `target_price == 0` →
+/// split market orders via `split_buy_chunks` (legacy fallback).
 pub async fn execute_split_buy(
     client: &UpbitClient,
     market: &str,
     total_krw: f64,
     target_price: f64,
 ) -> SplitOrderResult {
-    let chunks = split_buy_chunks(total_krw);
+    let chunks = if target_price > 0.0 {
+        if total_krw >= MIN_ORDER_KRW { vec![total_krw] } else { vec![] }
+    } else {
+        split_buy_chunks(total_krw)
+    };
     let n = chunks.len();
     let mut out = SplitOrderResult::default();
     for (i, amount) in chunks.iter().enumerate() {
@@ -100,7 +112,7 @@ pub async fn execute_split_buy(
     out
 }
 
-/// Execute a split SELL. `target_price > 0` → limit, 0 → market.
+/// Execute a SELL. `target_price > 0` → single maker-queue limit, 0 → split market.
 pub async fn execute_split_sell(
     client: &UpbitClient,
     market: &str,
@@ -108,7 +120,11 @@ pub async fn execute_split_sell(
     current_price: f64,
     target_price: f64,
 ) -> SplitOrderResult {
-    let chunks = split_sell_chunks(total_volume, current_price);
+    let chunks = if target_price > 0.0 {
+        if total_volume * current_price >= MIN_ORDER_KRW { vec![total_volume] } else { vec![] }
+    } else {
+        split_sell_chunks(total_volume, current_price)
+    };
     let n = chunks.len();
     let mut out = SplitOrderResult::default();
     for (i, vol) in chunks.iter().enumerate() {

@@ -62,6 +62,29 @@ pub fn weighted_avg_buy(
     (avg_price, total_vol)
 }
 
+/// Volume-weighted average fill price across all chunks of a multi-order
+/// result. Each chunk's individual avg fill price is taken from
+/// `OrderResponse::avg_fill_price` (trades-array first, paid_fee fallback),
+/// then weighted by that chunk's executed_volume.
+///
+/// Returns None if NO chunk has usable fill data — callers should fall back
+/// to the limit price.
+pub fn weighted_avg_fill(
+    orders: &[crate::api::upbit::OrderResponse],
+    fee_rate: f64,
+) -> Option<f64> {
+    let (sum_pv, sum_v) = orders.iter().fold((0.0_f64, 0.0_f64), |acc, o| {
+        let vol = o.executed_volume_f64();
+        if vol > 0.0 {
+            if let Some(p) = o.avg_fill_price(fee_rate) {
+                return (acc.0 + p * vol, acc.1 + vol);
+            }
+        }
+        acc
+    });
+    if sum_v > 0.0 { Some(sum_pv / sum_v) } else { None }
+}
+
 /// Run one cycle for a single session. Loads the FULL history from local DB
 /// — every hourly candle from `session.start_ts` (= preset.since_ts) to the
 /// most recent persisted bar — and replays the entire strategy. The output
@@ -412,13 +435,19 @@ async fn real_reconcile_step<'a>(
     use crate::services::order_executor::{execute_split_buy, execute_split_sell, MIN_ORDER_KRW};
     let now_ts = Utc::now().to_rfc3339();
     let fee_rate = 0.0005;
-    // Target price = real-time market price at execution time. Earlier
-    // policy used the last confirmed bar's close, which often left limits
-    // unfilled for an hour when the bar's close lagged the live price; the
-    // 1-hour gap between buy decision and reconcile booking was traced to
-    // exactly this. Pegging at `current_price` makes a limit fill near-
-    // instantly and removes the second 1-hour layer of the visible time gap.
-    let target_price = current_price;
+    // Limit-pricing policy: **maker queue**.
+    //   BUY  → peg at best_bid (joins the existing bid queue, never sweeps)
+    //   SELL → peg at best_ask
+    //
+    // Tradeoff: zero slippage when filled (limit = fill); orders may sit in
+    // `wait` and get cancelled by the next cycle's cancel_session_wait_orders
+    // if the book moved away. Earlier policy used `current_price` (last trade
+    // price), which often crossed the spread and effectively swept the book
+    // — that's the behaviour the user reported as "마치 시장가처럼 긁어버리는"
+    // even though it was technically a limit.
+    //
+    // Orderbook is fetched per-branch only when we actually place an order
+    // (skip for ready/hold paths to save one API call per cycle).
     // Trade-row ts for booking. Paper marker uses the strategy's transition-
     // bar timestamp (last confirmed bar) so paper + real markers stack on the
     // same candle on the chart.
@@ -443,8 +472,20 @@ async fn real_reconcile_step<'a>(
             // (default behaviour). When set, every BUY is capped at min(balance,
             // cap) before the 0.9995 fee buffer. Sells stay full balance.
             let order_krw = compute_buy_amount(krw_balance, session.max_order_krw);
+            // Maker-queue: peg at best_bid. Orderbook fetch failure aborts the
+            // order for THIS cycle (refuses to fall back to current_price which
+            // would cross the spread). Cycle continues — last_signal/cycle_ts
+            // still update so the next cycle retries cleanly.
+            let target_price_opt = match upbit.get_orderbook(&session.market).await {
+                Ok(ob) => ob.top_of_book().map(|(bid, _ask)| bid),
+                Err(e) => {
+                    crate::live_log!("[realBUY] orderbook fetch failed: {e}");
+                    None
+                }
+            };
+            if let Some(target_price) = target_price_opt {
             crate::live_log!(
-                "[real BUY] session={} {:.0} KRW @ limit {:.0} (current px)",
+                "[real BUY] session={} {:.0} KRW @ maker {:.0} (best_bid)",
                 session.id, order_krw, target_price,
             );
             let result = execute_split_buy(&upbit, &session.market, order_krw, target_price).await;
@@ -458,13 +499,19 @@ async fn real_reconcile_step<'a>(
                 let wait_orders: Vec<_> = result.orders.iter().filter(|o| !o.is_done()).collect();
                 let done_executed: f64 = done_orders.iter()
                     .map(|o| o.executed_volume_f64()).sum();
+                // Volume-weighted actual fill price (across chunks/trades).
+                // Under maker-queue policy this is normally == target_price
+                // (single price level), but partial fills across multiple
+                // ticks would diverge. Fallback to limit only if Upbit
+                // returned no usable fill data (e.g. trades=[] and paid_fee=0).
+                let booked_price = weighted_avg_fill(&result.orders, fee_rate)
+                    .unwrap_or(target_price);
 
                 // DB 작업은 별도 scope에 묶어 MutexGuard가 .await 경계로
                 // 새지 않도록 한다 (CLAUDE.md: MutexGuard !Send).
                 {
                     let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
                     if done_executed > 0.0 {
-                        let booked_price = target_price; // limit price ≈ fill price
                         let booked_volume = done_executed;
                         live_repo::insert_trade(
                             &conn, session.id, &bar_ts, "buy",
@@ -524,7 +571,7 @@ async fn real_reconcile_step<'a>(
                         note: Some(&note),
                     };
                     notifier.notify_trade_embed(
-                        "buy", &session.market, target_price, done_executed,
+                        "buy", &session.market, booked_price, done_executed,
                         None, &ctx, false,
                     ).await;
                 } else if !wait_orders.is_empty() {
@@ -533,10 +580,23 @@ async fn real_reconcile_step<'a>(
                     ).await;
                 }
             }
+            } else {
+                crate::live_log!("[realBUY] skipping order this cycle — no top-of-book");
+            }
         }
         "sell" if coin_balance * current_price > MIN_ORDER_KRW => {
+            // Maker-queue: peg at best_ask. Same orderbook-fetch-or-skip
+            // policy as BUY (refuse to cross the spread).
+            let target_price_opt = match upbit.get_orderbook(&session.market).await {
+                Ok(ob) => ob.top_of_book().map(|(_bid, ask)| ask),
+                Err(e) => {
+                    crate::live_log!("[realSELL] orderbook fetch failed: {e}");
+                    None
+                }
+            };
+            if let Some(target_price) = target_price_opt {
             crate::live_log!(
-                "[real SELL] session={} vol={:.8} @ limit {:.0} (current px)",
+                "[real SELL] session={} vol={:.8} @ maker {:.0} (best_ask)",
                 session.id, coin_balance, target_price,
             );
             let result = execute_split_sell(
@@ -549,11 +609,13 @@ async fn real_reconcile_step<'a>(
                 let wait_orders: Vec<_> = result.orders.iter().filter(|o| !o.is_done()).collect();
                 let done_executed: f64 = done_orders.iter()
                     .map(|o| o.executed_volume_f64()).sum();
+                // Volume-weighted actual fill price (across chunks/trades).
+                let booked_price = weighted_avg_fill(&result.orders, fee_rate)
+                    .unwrap_or(target_price);
 
                 {
                     let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
                     if done_executed > 0.0 {
-                        let booked_price = target_price;
                         let booked_volume = done_executed;
                         let buy_price = rec_buy_price;
                         let pnl = if buy_price > 0.0 {
@@ -602,11 +664,11 @@ async fn real_reconcile_step<'a>(
                 );
                 if done_executed > 0.0 {
                     let pnl_pct = if rec_buy_price > 0.0 {
-                        (target_price - rec_buy_price) / rec_buy_price * 100.0
+                        (booked_price - rec_buy_price) / rec_buy_price * 100.0
                     } else { 0.0 };
                     // 매도 후 잔고: 코인은 done_executed 만큼 줄고, KRW는 매도가 × 수량 만큼 늘어남.
                     let estimated_coin = (coin_balance - done_executed).max(0.0);
-                    let estimated_krw = krw_balance + target_price * done_executed;
+                    let estimated_krw = krw_balance + booked_price * done_executed;
                     let total_value = estimated_krw + estimated_coin * current_price;
                     let session_pnl = total_value / session.initial_capital * 100.0 - 100.0;
                     let note = format!(
@@ -625,7 +687,7 @@ async fn real_reconcile_step<'a>(
                         note: Some(&note),
                     };
                     notifier.notify_trade_embed(
-                        "sell", &session.market, target_price, done_executed,
+                        "sell", &session.market, booked_price, done_executed,
                         Some(pnl_pct), &ctx, false,
                     ).await;
                 } else if !wait_orders.is_empty() {
@@ -633,6 +695,9 @@ async fn real_reconcile_step<'a>(
                         &session.market, "sell", target_price, Some(&session.label),
                     ).await;
                 }
+            }
+            } else {
+                crate::live_log!("[realSELL] skipping order this cycle — no top-of-book");
             }
         }
         "buy" => {
@@ -648,11 +713,14 @@ async fn real_reconcile_step<'a>(
         // LiveTradingService.cs:1726-1756.
         "buy ready" if prev_signal != "buy ready" => {
             crate::live_log!("[realcycle] notify BUY READY (transition from '{}')", prev_signal);
-            notifier.notify_ready_embed(&session.market, "buy", target_price, Some(&session.label)).await;
+            // Ready alert shows the current market price (not a limit) — no
+            // order is placed at this stage, so best_bid/ask haven't been
+            // resolved. Keep using last trade price for display.
+            notifier.notify_ready_embed(&session.market, "buy", current_price, Some(&session.label)).await;
         }
         "sell ready" if prev_signal != "sell ready" => {
             crate::live_log!("[realcycle] notify SELL READY (transition from '{}')", prev_signal);
-            notifier.notify_ready_embed(&session.market, "sell", target_price, Some(&session.label)).await;
+            notifier.notify_ready_embed(&session.market, "sell", current_price, Some(&session.label)).await;
         }
         _ => {} // hold / ready / repeated ready — no action
     }

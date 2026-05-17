@@ -3,6 +3,21 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha512};
 use uuid::Uuid;
 
+/// Single fill record returned in `OrderResponse.trades`. Upbit fills a
+/// limit order across multiple `trades` when the limit price crosses several
+/// orderbook levels — each level becomes one TradeFill with its own price.
+/// Used to compute the volume-weighted average fill price.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TradeFill {
+    /// String per Upbit convention ("0.00150000"). Parse with `f64::from_str`.
+    #[serde(default)]
+    pub price: Option<String>,
+    #[serde(default)]
+    pub volume: Option<String>,
+    #[serde(default)]
+    pub funds: Option<String>,
+}
+
 /// Subset of Upbit /v1/orders response fields we actually use.
 /// All numeric fields ship as strings — Upbit returns "0.00150000" style
 /// formatted decimals, not numbers. Optional everywhere because market
@@ -20,6 +35,8 @@ pub struct OrderResponse {
     pub volume: Option<String>,
     #[serde(default)]
     pub remaining_volume: Option<String>,
+    /// LIMIT price the order was placed at — NOT the average fill price.
+    /// Use `avg_fill_price()` for what actually happened.
     #[serde(default)]
     pub price: Option<String>,
     #[serde(default)]
@@ -28,6 +45,12 @@ pub struct OrderResponse {
     pub paid_fee: Option<String>,
     #[serde(default)]
     pub trades_count: Option<i32>,
+    /// Per-fill records. Empty until Upbit returns the final state — typically
+    /// the response to `/v1/orders` (place) has trades=[] even for done orders
+    /// in some edge cases. Re-fetch via `/v1/order?uuid=` (get_order) to get
+    /// the populated trades array.
+    #[serde(default)]
+    pub trades: Vec<TradeFill>,
 }
 
 impl OrderResponse {
@@ -42,6 +65,72 @@ impl OrderResponse {
     /// `state == "done"` — Upbit's "fully executed" indicator.
     pub fn is_done(&self) -> bool {
         self.state == "done"
+    }
+
+    /// Volume-weighted average fill price.
+    ///
+    /// Resolution order:
+    ///   1. `trades` array — sum of (price × volume) / sum of volume.
+    ///      Most accurate when Upbit returns the populated array.
+    ///   2. `paid_fee / fee_rate / executed_volume` fallback — relies on the
+    ///      known fee_rate (0.0005). Off if the user has a non-default
+    ///      maker/taker rate, but better than the limit price.
+    ///   3. None — caller should fall back to the limit price.
+    ///
+    /// `fee_rate` is the per-trade rate (e.g. 0.0005 for Upbit's standard
+    /// 0.05% schedule). Callers in this codebase use the same constant.
+    pub fn avg_fill_price(&self, fee_rate: f64) -> Option<f64> {
+        // 1. trades 가중평균.
+        if !self.trades.is_empty() {
+            let (sum_pv, sum_v) = self.trades.iter().fold((0.0_f64, 0.0_f64), |acc, t| {
+                let p: f64 = t.price.as_deref().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+                let v: f64 = t.volume.as_deref().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+                (acc.0 + p * v, acc.1 + v)
+            });
+            if sum_v > 0.0 {
+                return Some(sum_pv / sum_v);
+            }
+        }
+
+        // 2. paid_fee 역산. fee = price × volume × fee_rate
+        //    → price = fee / (fee_rate × volume).
+        if fee_rate > 0.0 {
+            let fee: f64 = self.paid_fee.as_deref().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+            let vol = self.executed_volume_f64();
+            if fee > 0.0 && vol > 0.0 {
+                return Some(fee / (fee_rate * vol));
+            }
+        }
+
+        // 3. Give up.
+        None
+    }
+}
+
+/// One level of the orderbook. `ask_*` = sell side, `bid_*` = buy side.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrderbookUnit {
+    pub ask_price: f64,
+    pub bid_price: f64,
+    #[serde(default)]
+    pub ask_size: f64,
+    #[serde(default)]
+    pub bid_size: f64,
+}
+
+/// Upbit /v1/orderbook response: array of one market with N orderbook units.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Orderbook {
+    pub market: String,
+    pub orderbook_units: Vec<OrderbookUnit>,
+}
+
+impl Orderbook {
+    /// (best_bid, best_ask). Errors if the book has no units.
+    pub fn top_of_book(&self) -> Option<(f64, f64)> {
+        self.orderbook_units
+            .first()
+            .map(|u| (u.bid_price, u.ask_price))
     }
 }
 
@@ -135,6 +224,26 @@ impl UpbitClient {
             .and_then(|v| v.as_f64())
             .ok_or("Failed to parse price")?;
         Ok(price)
+    }
+
+    /// Fetch top-N orderbook for a market. Used by the maker-queue limit
+    /// pricing policy: BUY pegs at best_bid, SELL at best_ask so the order
+    /// never crosses the spread (zero slippage, may wait or expire).
+    ///
+    /// Returns the parsed `Orderbook` (one market). Errors on HTTP failure
+    /// or empty response.
+    pub async fn get_orderbook(
+        &self,
+        market: &str,
+    ) -> Result<Orderbook, Box<dyn std::error::Error>> {
+        let url = format!(
+            "https://api.upbit.com/v1/orderbook?markets={}",
+            market
+        );
+        let resp: Vec<Orderbook> = self.client.get(&url).send().await?.json().await?;
+        resp.into_iter()
+            .next()
+            .ok_or_else(|| "empty orderbook response".into())
     }
 
     pub async fn get_candles(
