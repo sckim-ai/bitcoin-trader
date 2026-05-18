@@ -679,6 +679,7 @@ export default function OptimizationPage() {
                   <th className="text-left py-2 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Status</th>
                   <th className="text-right py-2 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Pop × Gen</th>
                   <th className="text-right py-2 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Best Return</th>
+                  <th className="text-left py-2 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Period</th>
                   <th className="text-left py-2 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Started</th>
                   <th className="text-left py-2 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Action</th>
                 </tr>
@@ -708,6 +709,18 @@ export default function OptimizationPage() {
                     </td>
                     <td className="text-right py-2 px-3 font-data text-zinc-300">
                       {r.best_return !== null ? `${r.best_return.toFixed(2)}%` : "—"}
+                    </td>
+                    <td className="py-2 px-3 font-data text-zinc-400 text-xs whitespace-nowrap">
+                      {(() => {
+                        try {
+                          const c = r.constraints ? JSON.parse(r.constraints) : {};
+                          const s = typeof c.since === "string" ? c.since.slice(0, 10) : "";
+                          const u = typeof c.until === "string" ? c.until.slice(0, 10) : "";
+                          return s && u ? `${s} ~ ${u}` : "—";
+                        } catch {
+                          return "—";
+                        }
+                      })()}
                     </td>
                     <td className="py-2 px-3 font-data text-zinc-500 text-xs">
                       {r.started_at.slice(0, 16).replace("T", " ")}
@@ -747,7 +760,7 @@ export default function OptimizationPage() {
                 ))}
                 {runs.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="text-center py-6 text-zinc-500 text-xs">
+                    <td colSpan={8} className="text-center py-6 text-zinc-500 text-xs">
                       No optimization runs yet.
                     </td>
                   </tr>

@@ -69,6 +69,11 @@ export default function CandleChart({
   const bbSeriesRef = useRef<ISeriesApi<"Line">[]>([]);
   const sessionSeriesRef = useRef<Record<number, ISeriesApi<"Line">>>({});
   const runningRef = useRef<RunningCandleState>({ current: null });
+  // Tracks the first candle's timestamp. setData() leaves timeScale untouched,
+  // so we must call fitContent() ourselves when the user's window start changes
+  // (rangeStart edit → cutoff slides → first candle's timestamp changes).
+  // Live ticks only extend the tail, so this stays stable and won't re-fit.
+  const firstCandleTimeRef = useRef<number | null>(null);
 
   const [overlay, setOverlay] = useState<OverlayState>({ sma: true, bb: false, volume: true });
 
@@ -152,6 +157,7 @@ export default function CandleChart({
       bbSeriesRef.current = [];
       sessionSeriesRef.current = {};
       runningRef.current = { current: null };
+      firstCandleTimeRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -183,6 +189,16 @@ export default function CandleChart({
       time: c.time as UTCTimestamp, open: c.open, high: c.high, low: c.low, close: c.close,
     })));
     runningRef.current = initRunning(chartCandles);
+
+    // Re-fit timeScale only when the visible window's left edge has moved
+    // (initial mount OR user changed `rangeStart` upstream). Live tick updates
+    // append to the tail without touching the first candle's timestamp, so
+    // they don't trigger a fit — preserving any zoom/pan the user has done.
+    const firstTime = chartCandles[0]?.time ?? null;
+    if (firstTime !== firstCandleTimeRef.current) {
+      chart.timeScale().fitContent();
+      firstCandleTimeRef.current = firstTime;
+    }
 
     volumeSeries.setData(marketData.map(m => ({
       time: isoToUtcSec(m.candle.timestamp) as UTCTimestamp,
