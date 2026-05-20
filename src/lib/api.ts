@@ -65,11 +65,15 @@ export async function loadCsvData(
 export async function getCandles(
   market: string,
   timeframe: string,
-  limit?: number
+  limit?: number,
+  since?: string,
+  until?: string
 ): Promise<Candle[]> {
-  if (isTauri) return tauriInvoke("get_candles", { market, timeframe, limit });
+  if (isTauri) return tauriInvoke("get_candles", { market, timeframe, limit, since, until });
   const params: Record<string, string> = { market, timeframe };
   if (limit) params.limit = String(limit);
+  if (since) params.since = since;
+  if (until) params.until = until;
   return httpGet("/api/market/candles", params);
 }
 

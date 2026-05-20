@@ -13,7 +13,8 @@ pub fn get_account(conn: &Connection, id: i64) -> Result<Option<UpbitAccount>> {
     conn.query_row(
         "SELECT a.id, a.user_id, a.label, a.enabled, a.created_at,
                 EXISTS(SELECT 1 FROM live_sessions ls
-                       WHERE ls.upbit_account_id = a.id AND ls.status = 'running')
+                       WHERE ls.upbit_account_id = a.id AND ls.status = 'running'),
+                a.discord_webhook_url
          FROM upbit_accounts a WHERE a.id = ?1",
         [id],
         row_to_account_partial,
@@ -25,7 +26,8 @@ pub fn list_accounts(conn: &Connection, user_id: i64) -> Result<Vec<UpbitAccount
     let mut stmt = conn.prepare(
         "SELECT a.id, a.user_id, a.label, a.enabled, a.created_at,
                 EXISTS(SELECT 1 FROM live_sessions ls
-                       WHERE ls.upbit_account_id = a.id AND ls.status = 'running')
+                       WHERE ls.upbit_account_id = a.id AND ls.status = 'running'),
+                a.discord_webhook_url
          FROM upbit_accounts a WHERE a.user_id = ?1 ORDER BY a.id ASC",
     )?;
     let rows = stmt.query_map([user_id], row_to_account_partial)?;
@@ -43,6 +45,19 @@ pub fn set_enabled(conn: &Connection, id: i64, enabled: bool) -> Result<usize> {
     conn.execute(
         "UPDATE upbit_accounts SET enabled = ?1 WHERE id = ?2",
         params![enabled as i64, id],
+    )
+}
+
+/// 빈 문자열은 NULL로 정규화 (UI에서 input을 비워 저장하면 글로벌 fallback으로 돌아감).
+pub fn set_discord_webhook(
+    conn: &Connection,
+    id: i64,
+    url: Option<&str>,
+) -> Result<usize> {
+    let normalized: Option<&str> = url.map(|s| s.trim()).filter(|s| !s.is_empty());
+    conn.execute(
+        "UPDATE upbit_accounts SET discord_webhook_url = ?1 WHERE id = ?2",
+        params![normalized, id],
     )
 }
 
@@ -73,6 +88,7 @@ fn row_to_account_partial(row: &rusqlite::Row) -> Result<UpbitAccount> {
         has_access_key: false,
         has_secret_key: false,
         has_running_session: has_running != 0,
+        discord_webhook_url: row.get(6)?,
     })
 }
 
@@ -131,5 +147,24 @@ mod tests {
         assert!(!get_account(&conn, id).unwrap().unwrap().enabled);
         set_enabled(&conn, id, true).unwrap();
         assert!(get_account(&conn, id).unwrap().unwrap().enabled);
+    }
+
+    #[test]
+    fn discord_webhook_set_and_clear() {
+        let conn = setup();
+        let id = insert_account(&conn, 1, "Sub").unwrap();
+        // 기본은 NULL → 글로벌 fallback.
+        assert!(get_account(&conn, id).unwrap().unwrap().discord_webhook_url.is_none());
+
+        // URL 저장.
+        set_discord_webhook(&conn, id, Some("https://discord.com/api/webhooks/abc")).unwrap();
+        assert_eq!(
+            get_account(&conn, id).unwrap().unwrap().discord_webhook_url.as_deref(),
+            Some("https://discord.com/api/webhooks/abc")
+        );
+
+        // 빈 문자열은 NULL로 정규화 (UI 입력 비우기 = 글로벌 fallback 복귀).
+        set_discord_webhook(&conn, id, Some("   ")).unwrap();
+        assert!(get_account(&conn, id).unwrap().unwrap().discord_webhook_url.is_none());
     }
 }

@@ -48,6 +48,10 @@ pub struct CandlesQuery {
     pub market: String,
     pub timeframe: String,
     pub limit: Option<u32>,
+    #[serde(default)]
+    pub since: Option<String>,
+    #[serde(default)]
+    pub until: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -117,8 +121,15 @@ async fn candles_handler(
     Query(q): Query<CandlesQuery>,
 ) -> Result<Json<Vec<crate::models::market::Candle>>, ApiError> {
     let conn = state.db.lock().map_err(|e| internal_err(e.to_string()))?;
-    let candles = csv_import::load_candles(&conn, &q.market, &q.timeframe, q.limit)
-        .map_err(|e| internal_err(e.to_string()))?;
+    let candles = csv_import::load_candles_range(
+        &conn,
+        &q.market,
+        &q.timeframe,
+        q.limit,
+        q.since.as_deref(),
+        q.until.as_deref(),
+    )
+    .map_err(|e| internal_err(e.to_string()))?;
     Ok(Json(candles))
 }
 

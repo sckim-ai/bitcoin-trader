@@ -10,13 +10,14 @@ interface Props {
   onUpdated: () => void;
 }
 
-type Tab = "label" | "keys";
+type Tab = "label" | "keys" | "discord";
 
 export function EditAccountDialog({ account, onClose, onUpdated }: Props) {
   const [tab, setTab] = useState<Tab>("label");
   const [label, setLabel] = useState(account.label);
   const [accessKey, setAccessKey] = useState("");
   const [secretKey, setSecretKey] = useState("");
+  const [discordWebhook, setDiscordWebhook] = useState(account.discord_webhook_url ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -36,12 +37,15 @@ export function EditAccountDialog({ account, onClose, onUpdated }: Props) {
           return;
         }
         await updateUpbitAccount({ id: account.id, label: trimmed });
-      } else {
+      } else if (tab === "keys") {
         if (!accessKey.trim() || !secretKey.trim()) {
           setError("Access Key와 Secret Key를 모두 입력하세요.");
           return;
         }
         await updateUpbitAccount({ id: account.id, access_key: accessKey.trim(), secret_key: secretKey.trim() });
+      } else {
+        // discord 탭 — 빈 문자열도 명시적으로 보내야 NULL로 정규화됨.
+        await updateUpbitAccount({ id: account.id, discord_webhook_url: discordWebhook.trim() });
       }
       onUpdated();
       onClose();
@@ -90,6 +94,16 @@ export function EditAccountDialog({ account, onClose, onUpdated }: Props) {
             API 키 교체
             {keysDisabled && <span className="ml-1 text-[10px] text-amber-500">(세션 중)</span>}
           </button>
+          <button
+            onClick={() => { setTab("discord"); setError(null); }}
+            className={`flex-1 py-1.5 rounded-md text-xs font-medium transition-colors ${
+              tab === "discord"
+                ? "bg-zinc-700 text-zinc-100"
+                : "text-zinc-400 hover:text-zinc-200"
+            }`}
+          >
+            Discord
+          </button>
         </div>
 
         {/* Label mode */}
@@ -125,6 +139,23 @@ export function EditAccountDialog({ account, onClose, onUpdated }: Props) {
               value={secretKey}
               onChange={(e) => setSecretKey(e.target.value)}
               placeholder="새 Upbit Secret Key"
+              disabled={busy}
+            />
+          </div>
+        )}
+
+        {/* Discord mode */}
+        {tab === "discord" && (
+          <div className="space-y-2">
+            <p className="text-xs text-zinc-500">
+              이 계정 거래에 대한 Discord webhook. 비워두고 저장하면 Settings의
+              글로벌 webhook을 fallback으로 사용합니다.
+            </p>
+            <Input
+              label="Webhook URL"
+              value={discordWebhook}
+              onChange={(e) => setDiscordWebhook(e.target.value)}
+              placeholder="https://discord.com/api/webhooks/..."
               disabled={busy}
             />
           </div>

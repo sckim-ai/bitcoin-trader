@@ -115,7 +115,8 @@ pub fn get_session(conn: &Connection, id: i64) -> Result<Option<LiveSession>> {
                 ls.last_signal, ls.current_position, ls.current_buy_price, ls.current_buy_volume,
                 ls.current_equity, ls.live_return, ls.max_daily_loss_pct, ls.max_daily_trades,
                 ls.max_order_krw, ls.created_at,
-                ls.upbit_account_id, ua.label AS account_label
+                ls.upbit_account_id, ua.label AS account_label,
+                ua.discord_webhook_url AS account_discord_webhook
          FROM live_sessions ls
          LEFT JOIN upbit_accounts ua ON ua.id = ls.upbit_account_id
          WHERE ls.id = ?1",
@@ -132,7 +133,8 @@ pub fn list_sessions(conn: &Connection, user_id: i64) -> Result<Vec<LiveSession>
                 ls.last_signal, ls.current_position, ls.current_buy_price, ls.current_buy_volume,
                 ls.current_equity, ls.live_return, ls.max_daily_loss_pct, ls.max_daily_trades,
                 ls.max_order_krw, ls.created_at,
-                ls.upbit_account_id, ua.label AS account_label
+                ls.upbit_account_id, ua.label AS account_label,
+                ua.discord_webhook_url AS account_discord_webhook
          FROM live_sessions ls
          LEFT JOIN upbit_accounts ua ON ua.id = ls.upbit_account_id
          WHERE ls.user_id = ?1 ORDER BY ls.created_at DESC",
@@ -148,7 +150,8 @@ pub fn list_running_sessions(conn: &Connection) -> Result<Vec<LiveSession>> {
                 ls.last_signal, ls.current_position, ls.current_buy_price, ls.current_buy_volume,
                 ls.current_equity, ls.live_return, ls.max_daily_loss_pct, ls.max_daily_trades,
                 ls.max_order_krw, ls.created_at,
-                ls.upbit_account_id, ua.label AS account_label
+                ls.upbit_account_id, ua.label AS account_label,
+                ua.discord_webhook_url AS account_discord_webhook
          FROM live_sessions ls
          LEFT JOIN upbit_accounts ua ON ua.id = ls.upbit_account_id
          WHERE ls.status = 'running'",
@@ -313,6 +316,7 @@ fn row_to_session(row: &rusqlite::Row) -> Result<LiveSession> {
         created_at: row.get(20)?,
         upbit_account_id: row.get(21)?,
         account_label: row.get(22)?,
+        account_discord_webhook: row.get(23)?,
     })
 }
 

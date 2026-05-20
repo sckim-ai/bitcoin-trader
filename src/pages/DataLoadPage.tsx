@@ -7,17 +7,16 @@ import { getCurrentPrice } from "../lib/api";
 
 const MARKETS = ["BTC", "ETH"];
 const TIMEFRAMES = ["hour", "day", "week"];
-const LIMITS = [100, 500, 1000, 5000];
 const LIVE_POLL_MS = 2000;
 
 export default function DataLoadPage() {
-  const { candles, market, timeframe, limit, loading, error, setMarket, setTimeframe, setLimit, loadCandles, refreshCandles } =
+  const { candles, market, timeframe, since, loading, error, setMarket, setTimeframe, setSince, loadCandles, refreshCandles } =
     useMarketDataStore();
   const [livePrice, setLivePrice] = useState<number | null>(null);
 
   useEffect(() => {
     loadCandles();
-  }, [market, timeframe, limit, loadCandles]);
+  }, [market, timeframe, since, loadCandles]);
 
   // Periodic refresh so corrected high/low from background UPSERT reaches chart.
   useEffect(() => {
@@ -46,9 +45,9 @@ export default function DataLoadPage() {
   }, [market]);
 
   return (
-    <div className="space-y-6 animate-fade-in">
+    <div className="flex flex-col gap-6 h-full animate-fade-in">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between shrink-0">
         <h1 className="text-xl font-semibold text-zinc-100">Market Data</h1>
 
         {/* Pill toggles */}
@@ -83,15 +82,15 @@ export default function DataLoadPage() {
               </button>
             ))}
           </div>
-          <select
-            value={limit}
-            onChange={(e) => setLimit(Number(e.target.value))}
-            className="bg-[#0c0c0f] border border-[#1e1e26] rounded-lg px-3 py-1.5 text-xs font-semibold text-zinc-300"
-          >
-            {LIMITS.map((n) => (
-              <option key={n} value={n}>{n} bars</option>
-            ))}
-          </select>
+          <div className="flex items-center gap-2 bg-[#0c0c0f] border border-[#1e1e26] rounded-lg px-3 py-1 text-xs font-semibold">
+            <span className="text-zinc-500">Since</span>
+            <input
+              type="date"
+              value={since}
+              onChange={(e) => setSince(e.target.value)}
+              className="bg-transparent text-zinc-300 outline-none font-data"
+            />
+          </div>
         </div>
       </div>
 
@@ -110,8 +109,8 @@ export default function DataLoadPage() {
 
       {/* Chart */}
       {candles.length > 0 && (
-        <Card>
-          <CardContent className="p-2">
+        <Card className="flex-1 min-h-0">
+          <CardContent className="p-2 h-full">
             <CandlestickChart candles={candles} timeframe={timeframe} livePrice={livePrice} />
           </CardContent>
         </Card>
@@ -119,7 +118,7 @@ export default function DataLoadPage() {
 
       {/* Summary cards */}
       {candles.length > 0 && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 shrink-0">
           <MetricCard label="Candles" value={candles.length.toLocaleString()} color="amber" />
           <MetricCard
             label="Latest Close"

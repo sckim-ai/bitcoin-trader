@@ -38,6 +38,9 @@ pub struct AddAccountArgs {
     pub label: String,
     pub access_key: String,
     pub secret_key: String,
+    /// 계정 전용 Discord webhook. 비워두면 글로벌 설정을 fallback으로 사용.
+    #[serde(default)]
+    pub discord_webhook_url: Option<String>,
 }
 
 #[tauri::command]
@@ -56,13 +59,17 @@ pub async fn add_upbit_account(
     // Phase 1: DB row insert (짧은 sync 작업, lock 해제 후 await)
     let new_id = {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
-        upbit_accounts_repo::insert_account(&conn, 1, &label).map_err(|e| {
+        let id = upbit_accounts_repo::insert_account(&conn, 1, &label).map_err(|e| {
             if e.to_string().to_lowercase().contains("unique") {
                 "같은 이름의 계정이 이미 있습니다.".to_string()
             } else {
                 e.to_string()
             }
-        })?
+        })?;
+        if let Some(url) = args.discord_webhook_url.as_deref() {
+            let _ = upbit_accounts_repo::set_discord_webhook(&conn, id, Some(url));
+        }
+        id
     };
 
     // Phase 2: keyring write
@@ -120,6 +127,11 @@ pub struct UpdateAccountArgs {
     pub label: Option<String>,
     pub access_key: Option<String>,
     pub secret_key: Option<String>,
+    /// `None`(필드 부재) = 변경 없음.
+    /// `Some("")` 또는 공백 문자열 = NULL로 저장(글로벌 fallback).
+    /// `Some(url)` = 해당 URL로 교체.
+    #[serde(default)]
+    pub discord_webhook_url: Option<String>,
 }
 
 #[tauri::command]
@@ -143,6 +155,13 @@ pub async fn update_upbit_account(
                 e.to_string()
             }
         })?;
+    }
+
+    // webhook 변경은 running 세션 가드 없이 허용 (주문 경로 영향 없음).
+    if let Some(url) = args.discord_webhook_url.as_deref() {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        upbit_accounts_repo::set_discord_webhook(&conn, id, Some(url))
+            .map_err(|e| e.to_string())?;
     }
 
     // 키 변경은 running 세션 가드 + 새 키 검증.

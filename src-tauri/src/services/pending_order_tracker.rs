@@ -204,10 +204,15 @@ async fn reconcile_inner(
                         .ok().flatten();
                     (notifier, session_for_notif)
                 }; // ← MutexGuard dropped here
-                // Apply account prefix after the lock is released.
-                let notifier = notifier.with_account_label(
-                    session_for_notif.as_ref().and_then(|s| s.account_label.as_deref()),
-                );
+                // Apply account prefix + per-account Discord webhook override
+                // after the lock is released.
+                let notifier = notifier
+                    .with_account_label(
+                        session_for_notif.as_ref().and_then(|s| s.account_label.as_deref()),
+                    )
+                    .with_account_discord_webhook(
+                        session_for_notif.as_ref().and_then(|s| s.account_discord_webhook.as_deref()),
+                    );
 
                 resolved += 1;
                 crate::live_log!("[pending_tracker] resolved DONE {} (executed={:.8})",

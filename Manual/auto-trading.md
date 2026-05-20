@@ -46,6 +46,17 @@
 - `auto-trade:position` — 포지션 변경
 - `auto-trade:status` — 시작/중지 상태
 
+## 알림 채널별 노출 정책
+다중 사용자가 같은 디스코드 채널을 보는 환경을 가정해, 채널별로 노출 수준을 다르게 보냅니다(`notify_trade_embed` / `send_split`).
+
+| 채널 | 노출 내용 |
+|------|-----------|
+| **Discord (embed)** | 코인, **매수/매도 비율 %** (= 체결금액 / 총평가), 손익 %(매도), 시간, 세션 라벨, 세션 수익 % |
+| **Telegram / FCM (plain)** | 본인 채널 가정 — 체결가·수량·총평가까지 모두 포함 |
+
+- "매수/매도 비율"은 `(price × volume) / total_value_krw × 100`. 잔고 조회가 실패해 `total_value_krw`가 없으면 이 필드는 생략됩니다.
+- 매수/매도 대기, 주문 등록 알림(`notify_ready_embed`, `notify_order_registered_embed`)은 현재가/지정가를 그대로 노출합니다(시장가는 어차피 공개 정보).
+
 ---
 
 # 데이터 자동 업데이트 (Data Auto-Update)

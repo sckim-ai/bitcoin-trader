@@ -57,6 +57,7 @@ export default function CandlestickChart({ candles, timeframe = "hour", livePric
     if (!containerRef.current) return;
 
     const isHour = timeframe === "hour";
+    const initialHeight = containerRef.current.clientHeight || 400;
     const chart = createChart(containerRef.current, {
       layout: {
         background: { type: ColorType.Solid, color: "#030712" },
@@ -67,7 +68,7 @@ export default function CandlestickChart({ candles, timeframe = "hour", livePric
         horzLines: { color: "#1f2937" },
       },
       width: containerRef.current.clientWidth,
-      height: 400,
+      height: initialHeight,
       crosshair: {
         mode: 0,
       },
@@ -107,15 +108,17 @@ export default function CandlestickChart({ candles, timeframe = "hour", livePric
     candleSeriesRef.current = candleSeries;
     volumeSeriesRef.current = volumeSeries;
 
-    const handleResize = () => {
-      if (containerRef.current) {
-        chart.applyOptions({ width: containerRef.current.clientWidth });
-      }
-    };
-    window.addEventListener("resize", handleResize);
+    // ResizeObserver tracks parent flexbox/window resizes; window 'resize' alone
+    // misses layout shifts when sibling panels mount/unmount.
+    const ro = new ResizeObserver((entries) => {
+      const cr = entries[0]?.contentRect;
+      if (!cr) return;
+      chart.applyOptions({ width: cr.width, height: cr.height });
+    });
+    ro.observe(containerRef.current);
 
     return () => {
-      window.removeEventListener("resize", handleResize);
+      ro.disconnect();
       chart.remove();
     };
   }, [timeframe]);
@@ -174,5 +177,5 @@ export default function CandlestickChart({ candles, timeframe = "hour", livePric
     });
   }, [livePrice]);
 
-  return <div ref={containerRef} className="w-full rounded-lg overflow-hidden" />;
+  return <div ref={containerRef} className="w-full h-full rounded-lg overflow-hidden" />;
 }

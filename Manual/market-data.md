@@ -25,18 +25,26 @@ Upbit에서 BTC/ETH 캔들 데이터를 받아 SQLite에 저장. hour/day/week 3
 ### DataLoad 페이지 — 마켓/타임프레임 변경
 `marketDataStore.loadCandles`이 캔들 조회 후 비어있으면 `update_market_data` 호출.
 
+## 차트 높이 (창 사이즈 추종)
+
+DataLoad 페이지 차트는 viewport 사이즈에 따라 자동으로 fill됨:
+- 페이지 wrapper: `flex flex-col gap-6 h-full` — 헤더와 summary cards row는 `shrink-0`, chart Card는 `flex-1 min-h-0`. `min-h-0`이 핵심 — flex item의 기본 `min-height: auto`가 콘텐츠 기반이라 이 트릭 없이는 자식의 명시 높이가 fold되지 않음.
+- CandlestickChart 컨테이너 div: `w-full h-full` — 부모 카드의 content-box를 100% 채움.
+- 차트 사이즈 동기화: 기존 `window.resize` 이벤트 대신 `ResizeObserver`로 컨테이너의 width/height 변화 모두 lightweight-charts에 전파. 부모 flex 변화, 사이드바 폭 변동, 다른 패널 mount/unmount 등도 자동 추종.
+
 ## 차트 X축 라벨
 
 `CandlestickChart`는 `timeframe` prop을 받아 lightweight-charts 옵션을 분기:
 - `hour`: `timeVisible=true`, x축 `MM-DD HH:00`, crosshair `YYYY-MM-DD HH:00`
 - `day`/`week`: `timeVisible=false`, x축/crosshair 모두 `YYYY-MM-DD`
 
-## 데이터 가상화 (Bar Limit)
+## 데이터 조회 범위 (기간 기반)
 
-`get_candles`에 `limit?: u32` 파라미터를 추가. SQL은 `ORDER BY timestamp DESC LIMIT n` 후 ASC로 재정렬 → **항상 최신 N개**만 반환.
-- DataLoad 페이지에 `100/500/1000/5000` 셀렉터, 기본 500
-- 시뮬레이션/최적화 호출자는 `None`을 넘겨 전체 사용 (분석에는 풀 데이터 필요)
-- IPC 페이로드 크기와 차트 초기 렌더 시간 모두 감소
+`get_candles`는 `limit?`, `since?`, `until?` 세 옵셔널을 받음. 백엔드는 `csv_import::load_candles_range`로 위임 — `WHERE timestamp >= since AND timestamp <= until ORDER BY timestamp ASC`. `since`/`until`은 사전적 비교(lexical)라 `YYYY-MM-DD` 형식만으로도 ISO-8601 timestamp prefix와 정확히 매칭됨.
+
+- DataLoad 페이지: **"Since" date input** — 기본값은 오늘 - 1년. 사용자가 시작일을 임의로 변경 가능. 끝 시점은 항상 현재(미래 row가 DB에 없어 자연스럽게 cap됨).
+- 시뮬레이션/최적화 호출자는 셋 다 `None`/`undefined`로 호출해 전체 데이터 사용.
+- HTTP `/api/market/candles?since=...&until=...&limit=...`도 동일하게 지원.
 
 ## Live Price (캔들 완성 전 실시간 표시)
 

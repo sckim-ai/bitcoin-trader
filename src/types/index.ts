@@ -203,6 +203,8 @@ export interface UpbitAccount {
   has_access_key: boolean;
   has_secret_key: boolean;
   has_running_session: boolean;
+  /** 계정 전용 Discord webhook. null이면 Settings의 글로벌 webhook을 fallback으로 사용. */
+  discord_webhook_url?: string | null;
 }
 
 export interface LiveSession {
@@ -232,6 +234,8 @@ export interface LiveSession {
   max_order_krw: number | null;
   upbit_account_id: number | null;
   account_label: string | null;
+  /** 알림 전송 경로에서만 사용. UI에 표시하지 않음. */
+  account_discord_webhook?: string | null;
   created_at: string;
 }
 

@@ -6,6 +6,7 @@
 }
 
 :root {
+  color-scheme: dark;
   --bg-primary: #09090b;
   --bg-card: #0c0c0f;
   --bg-elevated: #141419;
@@ -55,10 +56,13 @@ body {
 }
 .animate-count { animation: countUp 0.3s ease-out; }
 
-/* Stagger animation */
+/* Stagger animation — opacity only.
+   Do NOT add `transform` here: page wrappers use this class, and a transformed
+   ancestor changes the containing block of `position: fixed` descendants,
+   which would push modal dialogs out of viewport on long pages. */
 @keyframes fadeInUp {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 .animate-fade-in { animation: fadeInUp 0.4s ease-out both; }
 

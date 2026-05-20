@@ -113,6 +113,11 @@ pub struct LiveSession {
     /// JOIN으로 가져오는 표시용 라벨. NULL이면 "[삭제됨]"으로 UI가 표시.
     #[serde(default)]
     pub account_label: Option<String>,
+    /// 이 계정 전용 Discord webhook (JOIN으로 가져옴).
+    /// NULL이면 `notification_configs`의 글로벌 webhook을 fallback으로 사용.
+    /// 알림 전송 경로에서만 사용되며 UI에는 노출하지 않음.
+    #[serde(default)]
+    pub account_discord_webhook: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

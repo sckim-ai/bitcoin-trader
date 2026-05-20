@@ -87,6 +87,8 @@ export interface AddAccountArgs {
   label: string;
   access_key: string;
   secret_key: string;
+  /** 비워두면 Settings의 글로벌 Discord webhook이 fallback. */
+  discord_webhook_url?: string;
 }
 export const addUpbitAccount = (args: AddAccountArgs): Promise<UpbitAccount> =>
   invoke("add_upbit_account", { args });
@@ -96,6 +98,8 @@ export interface UpdateAccountArgs {
   label?: string;
   access_key?: string;
   secret_key?: string;
+  /** undefined=변경 없음, 빈 문자열="" = 글로벌 fallback으로 복귀, 문자열=교체. */
+  discord_webhook_url?: string;
 }
 export const updateUpbitAccount = (args: UpdateAccountArgs): Promise<void> =>
   invoke("update_upbit_account", { args });

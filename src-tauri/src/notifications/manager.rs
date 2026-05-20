@@ -112,6 +112,18 @@ impl NotificationManager {
         self
     }
 
+    /// Override the Discord webhook with a per-account URL. When `Some(url)`
+    /// is given (and non-empty), the global Discord webhook loaded from
+    /// `notification_configs` is replaced — letting each Upbit account post
+    /// to its own channel. `None` or empty → keep the global webhook
+    /// (fallback). Telegram/FCM are unaffected: only Discord routes split.
+    pub fn with_account_discord_webhook(mut self, url: Option<&str>) -> Self {
+        if let Some(u) = url.map(str::trim).filter(|s| !s.is_empty()) {
+            self.discord = Some(DiscordClient::new(u.to_string()));
+        }
+        self
+    }
+
     pub async fn notify_trade(
         &self,
         side: &str,
@@ -323,16 +335,27 @@ impl NotificationManager {
             (false, true) => "⏱📉",
         };
         let title = format!("{} {} 체결", title_emoji, if is_buy { "매수" } else { "매도" });
-        let price_label = if is_buy { "매수가" } else { "매도가" };
         let kst = (chrono::Utc::now() + chrono::Duration::hours(9))
             .format("%Y-%m-%d %H:%M:%S")
             .to_string();
 
+        // 다중 사용자 시청 환경 — 디스코드 embed는 절대값(가격/수량/잔고) 대신
+        // 총평가 대비 체결금액 비율만 노출. Plain text(텔레그램/FCM)는 그대로.
+        let trade_pct = ctx.total_value_krw
+            .filter(|t| *t > 0.0)
+            .map(|t| (price * volume) / t * 100.0);
+        let trade_pct_label = if is_buy { "매수 비율" } else { "매도 비율" };
+
         let mut fields: Vec<serde_json::Value> = vec![
             json!({"name": "코인", "value": format!("`{}`", market), "inline": true}),
-            json!({"name": price_label, "value": format!("`{}` KRW", fmt_int(price)), "inline": true}),
-            json!({"name": "수량", "value": format!("`{:.6}`", volume), "inline": true}),
         ];
+        if let Some(p) = trade_pct {
+            fields.push(json!({
+                "name": trade_pct_label,
+                "value": format!("`{:.2}%`", p),
+                "inline": true,
+            }));
+        }
         if !is_buy {
             if let Some(p) = pnl_pct {
                 let sign = if p >= 0.0 { "+" } else { "" };
@@ -349,28 +372,9 @@ impl NotificationManager {
             "inline": false,
         }));
 
-        // Balance block
-        if let (Some(krw), Some(coin), Some(cur)) =
-            (ctx.krw_balance, ctx.coin_balance, ctx.coin_currency)
-        {
-            let coin_value = coin * ctx.coin_price.unwrap_or(0.0);
-            fields.push(json!({"name": "💰 보유 KRW", "value": format!("`{}` KRW", fmt_int(krw)), "inline": true}));
-            fields.push(json!({
-                "name": format!("💰 보유 {}", cur),
-                "value": format!("`{:.6}` ({} KRW)", coin, fmt_int(coin_value)),
-                "inline": true,
-            }));
-            if let Some(total) = ctx.total_value_krw {
-                fields.push(json!({"name": "💰 총 평가", "value": format!("`{}` KRW", fmt_int(total)), "inline": true}));
-            }
-        }
-
-        // Session block
+        // Session block — 라벨/수익 %만 노출 (시작 자산 절대값은 숨김)
         if let Some(label) = ctx.session_label {
             fields.push(json!({"name": "📊 세션", "value": format!("`{}`", label), "inline": true}));
-        }
-        if let Some(init) = ctx.session_initial {
-            fields.push(json!({"name": "📊 세션 시작 자산", "value": format!("`{}` KRW", fmt_int(init)), "inline": true}));
         }
         if let Some(p) = ctx.session_pnl_pct {
             let sign = if p >= 0.0 { "+" } else { "" };

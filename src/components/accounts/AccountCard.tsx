@@ -54,6 +54,13 @@ export function AccountCard({ account, onTest, onEdit, onDelete, onToggleEnabled
           )}
         </div>
 
+        {/* Discord webhook status — 없으면 글로벌 fallback 사용 명시. */}
+        <div className="text-xs text-zinc-500">
+          {account.discord_webhook_url
+            ? <span className="text-violet-400">Discord: 계정 전용 채널</span>
+            : <span>Discord: 글로벌 fallback</span>}
+        </div>
+
         {/* Test result */}
         {testResult != null && (
           <p className={`text-xs break-all ${

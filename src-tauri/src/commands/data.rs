@@ -50,10 +50,20 @@ pub fn get_candles(
     market: String,
     timeframe: String,
     limit: Option<u32>,
+    since: Option<String>,
+    until: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Vec<Candle>, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-    csv_import::load_candles(&conn, &market, &timeframe, limit).map_err(|e| e.to_string())
+    csv_import::load_candles_range(
+        &conn,
+        &market,
+        &timeframe,
+        limit,
+        since.as_deref(),
+        until.as_deref(),
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "../ui/Button";
 import { Input } from "../ui/Input";
 
@@ -32,8 +32,21 @@ export default function SavePresetDialog({
     }
   };
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !submitting) onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose, submitting]);
+
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+    <div
+      className="fixed inset-0 bg-black/60 flex items-center justify-center z-50"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget && !submitting) onClose();
+      }}
+    >
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 w-96 space-y-4">
         <h3 className="text-lg font-semibold text-zinc-100">Save Simulation Preset</h3>
 

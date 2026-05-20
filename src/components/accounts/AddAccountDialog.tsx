@@ -13,6 +13,7 @@ export function AddAccountDialog({ open, onClose, onAdded }: Props) {
   const [label, setLabel] = useState("");
   const [accessKey, setAccessKey] = useState("");
   const [secretKey, setSecretKey] = useState("");
+  const [discordWebhook, setDiscordWebhook] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -25,10 +26,16 @@ export function AddAccountDialog({ open, onClose, onAdded }: Props) {
     setBusy(true);
     setError(null);
     try {
-      await addUpbitAccount({ label: label.trim(), access_key: accessKey.trim(), secret_key: secretKey.trim() });
+      await addUpbitAccount({
+        label: label.trim(),
+        access_key: accessKey.trim(),
+        secret_key: secretKey.trim(),
+        discord_webhook_url: discordWebhook.trim() || undefined,
+      });
       setLabel("");
       setAccessKey("");
       setSecretKey("");
+      setDiscordWebhook("");
       onAdded();
       onClose();
     } catch (e) {
@@ -43,6 +50,7 @@ export function AddAccountDialog({ open, onClose, onAdded }: Props) {
     setLabel("");
     setAccessKey("");
     setSecretKey("");
+    setDiscordWebhook("");
     setError(null);
     onClose();
   };
@@ -84,6 +92,18 @@ export function AddAccountDialog({ open, onClose, onAdded }: Props) {
           placeholder="Upbit Secret Key"
           disabled={busy}
         />
+        <div className="space-y-1">
+          <Input
+            label="Discord Webhook (선택)"
+            value={discordWebhook}
+            onChange={(e) => setDiscordWebhook(e.target.value)}
+            placeholder="https://discord.com/api/webhooks/..."
+            disabled={busy}
+          />
+          <p className="text-[10px] text-zinc-500">
+            비워두면 Settings의 글로벌 Discord 채널을 사용합니다.
+          </p>
+        </div>
 
         {error && (
           <p className="text-xs text-rose-400 break-all">{error}</p>
