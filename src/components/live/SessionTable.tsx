@@ -1,3 +1,4 @@
+import { MessageCircle, MessageCircleOff } from "lucide-react";
 import { Button } from "../ui/Button";
 import { Badge } from "../ui/Badge";
 import type { LiveSession, Preset, TickData } from "../../types";
@@ -15,6 +16,8 @@ interface Props {
   onPromoteRequest: (session: LiveSession) => void;
   /** Demote a real session back to paper (no confirm — reversible direction). */
   onDemote: (id: number) => void;
+  /** Open the per-session Discord channel picker (paper only). */
+  onEditNotifyChannels: (session: LiveSession) => void;
 }
 
 function pctColor(v: number, neutral = "text-zinc-500") {
@@ -26,7 +29,7 @@ function fmtPct(v: number) {
 }
 
 export default function SessionTable({
-  sessions, presets, ticks, onStart, onStop, onDelete, onPromoteRequest, onDemote,
+  sessions, presets, ticks, onStart, onStop, onDelete, onPromoteRequest, onDemote, onEditNotifyChannels,
 }: Props) {
   const hiddenSessionIds = useLiveTradingStore((s) => s.hiddenSessionIds);
   const toggleSessionVisibility = useLiveTradingStore((s) => s.toggleSessionVisibility);
@@ -105,14 +108,34 @@ export default function SessionTable({
                   <Badge variant={s.mode === "real" ? "amber" : "default"}>
                     {s.mode === "real" ? "REAL" : "paper"}
                   </Badge>
-                  {s.mode === "real" && (
+                  {s.mode === "real" ? (
                     <span
                       className="text-[10px] text-zinc-600 font-data italic"
                       title="Daily loss / trade-count auto-stop is currently disabled. Use Kill switch for manual emergency stop."
                     >
                       limits off
                     </span>
-                  )}
+                  ) : (() => {
+                    const channelCount = s.notify_account_ids?.length ?? 0;
+                    const on = channelCount > 0;
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => onEditNotifyChannels(s)}
+                        title={
+                          on
+                            ? `Discord 알림 ${channelCount}개 채널로 발송 중 — 클릭하여 채널 편집`
+                            : "Discord 알림 꺼짐 — 클릭하여 채널 선택"
+                        }
+                        className={`inline-flex items-center gap-1 text-[10px] self-start ${
+                          on ? "text-violet-400 hover:text-violet-300" : "text-zinc-600 hover:text-zinc-400"
+                        }`}
+                      >
+                        {on ? <MessageCircle size={11} /> : <MessageCircleOff size={11} />}
+                        <span>{on ? `discord (${channelCount})` : "discord off"}</span>
+                      </button>
+                    );
+                  })()}
                 </div>
               </td>
               <td>

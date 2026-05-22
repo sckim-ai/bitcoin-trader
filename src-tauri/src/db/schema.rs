@@ -102,6 +102,20 @@ pub fn initialize(db_path: &Path) -> Result<Connection> {
             return Err(e);
         }
     }
+    let schema_v16 = include_str!("../../migrations/016_session_notify_discord.sql");
+    if let Err(e) = conn.execute_batch(schema_v16) {
+        let msg = e.to_string();
+        if !msg.contains("duplicate column") && !msg.contains("already exists") {
+            return Err(e);
+        }
+    }
+    let schema_v17 = include_str!("../../migrations/017_session_notify_accounts.sql");
+    if let Err(e) = conn.execute_batch(schema_v17) {
+        let msg = e.to_string();
+        if !msg.contains("duplicate column") && !msg.contains("already exists") {
+            return Err(e);
+        }
+    }
     // Backfill best_return cache for pre-migration runs so the listing
     // query works uniformly. Idempotent: only touches NULL rows.
     conn.execute(

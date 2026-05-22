@@ -34,6 +34,15 @@ export const createSession = (args: CreateSessionArgs): Promise<number> =>
 /// Update or clear a session's BUY cap (KRW). Pass null to clear (full balance).
 export const setSessionOrderCap = (id: number, max_order_krw: number | null): Promise<void> =>
   invoke("set_session_order_cap", { id, maxOrderKrw: max_order_krw });
+
+/// paper 세션 Discord 알림 토글. real 세션에 호출해도 무해(알림 정책상 효과 없음).
+/// (Deprecated) 016 boolean — 새 UI는 setSessionNotifyAccountIds 사용.
+export const setSessionNotifyDiscord = (id: number, value: boolean): Promise<void> =>
+  invoke("set_session_notify_discord", { id, value });
+
+/// Paper 세션 알림 fan-out 계정 목록 갱신. 빈 array면 알림 off.
+export const setSessionNotifyAccountIds = (id: number, accountIds: number[]): Promise<void> =>
+  invoke("set_session_notify_account_ids", { id, accountIds });
 export const startSession = (id: number): Promise<void> =>
   invoke("start_session", { id });
 export const stopSession = (id: number): Promise<void> =>
@@ -113,6 +122,14 @@ export const setUpbitAccountEnabled = (id: number, enabled: boolean): Promise<vo
 /** Returns the number of currencies the account holds — proves keys work. */
 export const testUpbitAccountConnection = (id: number): Promise<number> =>
   invoke("test_upbit_account_connection", { id });
+
+/**
+ * 계정의 알림 라우팅(계정 webhook → 글로벌 fallback)을 그대로 거쳐
+ * Discord에 단일 테스트 메시지 전송. 결과 문자열에 "계정 전용 채널" /
+ * "글로벌 fallback" 중 어디로 전송됐는지 명시됨.
+ */
+export const testAccountDiscord = (id: number): Promise<string> =>
+  invoke("test_account_discord", { accountId: id });
 
 // ─── Market Ticks ───
 /// Subscribe to market ticks. Returns an unsubscribe function.

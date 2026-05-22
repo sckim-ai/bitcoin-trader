@@ -248,6 +248,22 @@ pub async fn run_session_cycle(
         ).await {
             crate::live_log!("[realcycle] session={} reconcile error: {e}", session.id);
         }
+    } else {
+        // 4c. Paper 모드: 실주문은 없지만 signal_log 마지막 신호를 final_signal로
+        //     변환해 last_signal_str에 반영(prev/cur 전이를 다음 cycle이 인식 가능).
+        //     notify_account_ids에 1개 이상 계정이 있으면 각 계정의 webhook으로
+        //     N번 fan-out — 회색 톤 + "📄 PAPER" 표식.
+        let sim_signal = last_signal_from_simulation(&result);
+        let final_signal = resolve_live_signal(sim_signal, result.last_position);
+        if !session.notify_account_ids.is_empty() {
+            let current_price = data.last().map(|d| d.candle.close).unwrap_or(0.0);
+            if let Err(e) = paper_notify_step(
+                db, &session, &result, current_price, current_position, final_signal, equity,
+            ).await {
+                crate::live_log!("[paper notify] session={} error: {e}", session.id);
+            }
+        }
+        last_signal_str = final_signal.to_string();
     }
 
     // 5. Update session + equity snapshot. Re-acquire conn after any awaits.
@@ -731,6 +747,126 @@ async fn real_reconcile_step<'a>(
     *cbv = applied_buy_volume;
     *last_signal = final_signal.to_string();
 
+    Ok(())
+}
+
+/// Paper 세션용 Discord 알림. real_reconcile_step과 같은 모양의 분기지만
+/// 실주문/잔고 정보가 없으니 시뮬레이션 결과(`result`)에서 가격과 P/L을
+/// 끌어오고, NotificationManager에 `with_paper_mode(true)`를 걸어 색·제목이
+/// 회색 톤으로 dim된다.
+///
+/// `session.notify_account_ids`의 각 계정에 대해 별도 NotificationManager를
+/// 빌드해 N번 fan-out — 메시지 prefix("[label] ")로 어느 채널인지 식별.
+/// Telegram/FCM은 `discord_only()`로 비활성화해 N번 중복 발송을 막는다.
+///
+/// 알림 종류:
+///   - idle → holding 전이: paper BUY (`result.last_buy_price` + rough_volume)
+///   - holding → idle 전이: paper SELL (`result.trades.last()`의 sell_price/pnl_pct)
+///   - signal_type 전이 → "buy ready" / "sell ready" 알림
+async fn paper_notify_step(
+    db: &Arc<Mutex<Connection>>,
+    session: &LiveSession,
+    result: &SimulationResult,
+    current_price: f64,
+    new_position: &str,
+    final_signal: &str,
+    equity: f64,
+) -> Result<(), BoxErr> {
+    // 1. 선택된 계정들의 (label, webhook_url) 한 번에 조회.
+    //    삭제됐거나 존재하지 않는 ID는 조용히 skip.
+    let targets: Vec<(String, Option<String>)> = {
+        let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
+        let mut out = Vec::with_capacity(session.notify_account_ids.len());
+        for &aid in &session.notify_account_ids {
+            if let Ok(Some(acc)) = crate::db::upbit_accounts_repo::get_account(&conn, aid) {
+                out.push((acc.label, acc.discord_webhook_url));
+            }
+        }
+        out
+    };
+    if targets.is_empty() {
+        return Ok(());
+    }
+
+    let prev_signal = session.last_signal.as_deref().unwrap_or_default();
+    let prev_position = session.current_position.as_str();
+    let session_initial = session.initial_capital;
+    let session_pnl_pct = if session_initial > 0.0 {
+        equity / session_initial * 100.0 - 100.0
+    } else {
+        0.0
+    };
+
+    // 전이 판정 (한 번만) + 각 fan-out target에 대해 동일 메시지를 채널별로 발송.
+    let buy_fired = prev_position != "holding" && new_position == "holding";
+    let sell_fired = prev_position == "holding" && new_position == "idle";
+    let buy_ready_fired = final_signal == "buy ready" && prev_signal != "buy ready";
+    let sell_ready_fired = final_signal == "sell ready" && prev_signal != "sell ready";
+
+    if !(buy_fired || sell_fired || buy_ready_fired || sell_ready_fired) {
+        return Ok(());
+    }
+
+    for (label, webhook) in &targets {
+        let notifier = {
+            let conn = db.lock().map_err(|e| -> BoxErr { e.to_string().into() })?;
+            crate::notifications::manager::NotificationManager::from_db(&conn, session.user_id)
+                .discord_only()
+                .with_account_label(Some(label.as_str()))
+                .with_account_discord_webhook(webhook.as_deref())
+                .with_paper_mode(true)
+        };
+
+        if buy_fired {
+            let buy_price = result.last_buy_price;
+            let rough_volume = if buy_price > 0.0 { session_initial / buy_price } else { 0.0 };
+            let ctx = crate::notifications::manager::TradeContext {
+                total_value_krw: Some(equity),
+                session_label: Some(&session.label),
+                session_initial: Some(session_initial),
+                session_pnl_pct: Some(session_pnl_pct),
+                ..Default::default()
+            };
+            notifier
+                .notify_trade_embed(
+                    "buy", &session.market, buy_price, rough_volume, None, &ctx, false,
+                )
+                .await;
+        }
+
+        if sell_fired {
+            if let Some(last_trade) = result.trades.last() {
+                let sell_price = last_trade.sell_price;
+                let buy_price = last_trade.buy_price;
+                let rough_volume = if buy_price > 0.0 { session_initial / buy_price } else { 0.0 };
+                let pnl_pct_display = last_trade.pnl_pct * 100.0;
+                let ctx = crate::notifications::manager::TradeContext {
+                    total_value_krw: Some(equity),
+                    session_label: Some(&session.label),
+                    session_initial: Some(session_initial),
+                    session_pnl_pct: Some(session_pnl_pct),
+                    ..Default::default()
+                };
+                notifier
+                    .notify_trade_embed(
+                        "sell", &session.market, sell_price, rough_volume,
+                        Some(pnl_pct_display), &ctx, false,
+                    )
+                    .await;
+            }
+        }
+
+        if buy_ready_fired {
+            notifier
+                .notify_ready_embed(&session.market, "buy", current_price, Some(&session.label))
+                .await;
+        }
+        if sell_ready_fired {
+            notifier
+                .notify_ready_embed(&session.market, "sell", current_price, Some(&session.label))
+                .await;
+        }
+    }
     Ok(())
 }
 

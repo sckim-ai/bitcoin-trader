@@ -57,6 +57,42 @@
 - "매수/매도 비율"은 `(price × volume) / total_value_krw × 100`. 잔고 조회가 실패해 `total_value_krw`가 없으면 이 필드는 생략됩니다.
 - 매수/매도 대기, 주문 등록 알림(`notify_ready_embed`, `notify_order_registered_embed`)은 현재가/지정가를 그대로 노출합니다(시장가는 어차피 공개 정보).
 
+## Paper 세션 알림 (선택)
+Real 세션은 항상 디스코드 알림이 발송되지만, paper 세션은 **세션별 채널 선택**으로 제어합니다 (`live_sessions.notify_account_ids` — JSON array of Upbit account ids).
+
+### 활성화 (세션 리스트에서 채널 선택)
+- **Live Trading** 페이지의 세션 테이블 **Mode 컬럼** 하단에 paper 세션마다 `discord (N)` / `discord off` 버튼이 표시됩니다.
+- 클릭하면 **채널 선택 모달**이 열립니다 — 등록된 Upbit 계정 목록 중 다중 체크박스로 발송 대상을 고릅니다.
+- 각 계정 옆에 webhook 상태가 표시됩니다:
+  - `전용 채널` — 계정에 설정된 webhook으로 발송
+  - `글로벌 fallback` — 계정에 webhook이 없어 Settings의 글로벌 채널로 fallback
+- 저장 시 즉시 반영(optimistic update). 실패 시 이전 값으로 롤백.
+- 모든 체크박스를 해제하고 저장하면 알림 off.
+- Real 세션에는 이 버튼이 표시되지 않습니다(real은 항상 자기 계정 webhook으로 알림 발송).
+
+### Fan-out 동작
+- 선택된 계정 N개에 대해 매 cycle 끝의 알림이 **N번 발송**됩니다 (각 메시지의 prefix는 해당 계정 라벨).
+- 텔레그램/FCM은 paper 알림에서 **비활성화**됩니다 (다중 채널 fan-out 의도에 맞춰 Discord 전용). 본인 채널로 paper 알림을 받고 싶다면 자기 계정에 webhook을 등록하고 그 계정을 선택하세요.
+
+### Paper 알림 이벤트
+| 전이 | 알림 |
+|------|------|
+| idle → holding | 📄 PAPER 매수 체결 (시뮬레이션 가격) |
+| holding → idle | 📄 PAPER 매도 체결 (P/L %) |
+| ready 신호 전이 | 📄 PAPER 매수 대기 / 매도 대기 |
+| (주문 등록은 paper에 해당 없음) | — |
+
+### 시각적 구분
+- 모든 paper embed의 제목 앞에 **`📄 PAPER`** prefix.
+- 색상이 회색 톤으로 dim됨 — buy=`#88AA88`, sell=`#AA8888`, ready/wait=`#999999`.
+- 실주문 알림과 시각적으로 명확히 구분되어 다중 사용자 시청 환경에서 오해를 방지합니다.
+
+### 가격/수량의 정확도
+- paper는 실 잔고가 없으므로 메시지 표시값은 시뮬레이션 추정치입니다:
+  - 매수가/매도가: 시뮬레이션의 trade 가격
+  - 수량: `initial_capital / buy_price` 기준 추정 (paper trade row 저장값과 일치)
+  - 총평가: equity (이번 cycle 시뮬레이션의 누적 결과)
+
 ---
 
 # 데이터 자동 업데이트 (Data Auto-Update)

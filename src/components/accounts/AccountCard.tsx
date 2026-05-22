@@ -1,4 +1,4 @@
-import { CheckCircle, AlertTriangle, Activity, Wifi, Pencil, Trash2, Power } from "lucide-react";
+import { CheckCircle, AlertTriangle, Activity, Wifi, Pencil, Trash2, Power, MessageCircle } from "lucide-react";
 import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
 import { Card, CardContent } from "../ui/Card";
@@ -7,14 +7,16 @@ import type { UpbitAccount } from "../../types";
 interface Props {
   account: UpbitAccount;
   onTest: (id: number) => void;
+  onTestDiscord: (id: number) => void;
   onEdit: (id: number) => void;
   onDelete: (id: number) => void;
   onToggleEnabled: (id: number, next: boolean) => void;
   testing?: boolean;
+  testingDiscord?: boolean;
   testResult?: string | null;
 }
 
-export function AccountCard({ account, onTest, onEdit, onDelete, onToggleEnabled, testing, testResult }: Props) {
+export function AccountCard({ account, onTest, onTestDiscord, onEdit, onDelete, onToggleEnabled, testing, testingDiscord, testResult }: Props) {
   const keysOk = account.has_access_key && account.has_secret_key;
   const locked = account.has_running_session;
 
@@ -82,6 +84,16 @@ export function AccountCard({ account, onTest, onEdit, onDelete, onToggleEnabled
           >
             <Wifi size={13} />
             {testing ? "테스트 중…" : "Test"}
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => onTestDiscord(account.id)}
+            disabled={testingDiscord}
+            title="계정 webhook(없으면 글로벌 fallback)으로 테스트 메시지 전송"
+          >
+            <MessageCircle size={13} />
+            {testingDiscord ? "전송 중…" : "Discord"}
           </Button>
           <Button
             size="sm"

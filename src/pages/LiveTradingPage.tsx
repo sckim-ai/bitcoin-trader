@@ -8,6 +8,7 @@ import SessionTable from "../components/live/SessionTable";
 import NewSessionDialog from "../components/live/NewSessionDialog";
 import LiveLogPanel from "../components/live/LiveLogPanel";
 import PromoteRealDialog from "../components/live/PromoteRealDialog";
+import { NotifyChannelsDialog } from "../components/live/NotifyChannelsDialog";
 import PendingOrdersWidget from "../components/live/PendingOrdersWidget";
 import ManualOrderCard from "../components/live/ManualOrderCard";
 import LiveKpiBar from "../components/live/LiveKpiBar";
@@ -36,7 +37,9 @@ export default function LiveTradingPage() {
   } = useLiveTradingStore();
   const [showNew, setShowNew] = useState(false);
   const [promoteTarget, setPromoteTarget] = useState<LiveSession | null>(null);
+  const [notifyTarget, setNotifyTarget] = useState<LiveSession | null>(null);
   const [killBusy, setKillBusy] = useState(false);
+  const setSessionNotifyAccountIds = useLiveTradingStore((s) => s.setSessionNotifyAccountIds);
 
   const realSessionCount = useMemo(
     () => sessions.filter((s) => s.mode === "real").length,
@@ -399,6 +402,7 @@ export default function LiveTradingPage() {
             }}
             onPromoteRequest={(s) => setPromoteTarget(s)}
             onDemote={handleDemote}
+            onEditNotifyChannels={(s) => setNotifyTarget(s)}
           />
         </CardContent>
       </Card>
@@ -422,6 +426,18 @@ export default function LiveTradingPage() {
           onClose={() => setPromoteTarget(null)}
           onConfirm={async (accountId) => {
             await toggleSessionMode(promoteTarget.id, "real", accountId);
+          }}
+        />
+      )}
+
+      {notifyTarget && (
+        <NotifyChannelsDialog
+          sessionId={notifyTarget.id}
+          sessionLabel={notifyTarget.label}
+          initialAccountIds={notifyTarget.notify_account_ids ?? []}
+          onClose={() => setNotifyTarget(null)}
+          onSave={async (ids) => {
+            await setSessionNotifyAccountIds(notifyTarget.id, ids);
           }}
         />
       )}

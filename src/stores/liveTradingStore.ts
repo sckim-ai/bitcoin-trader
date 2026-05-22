@@ -12,6 +12,8 @@ import {
   deletePreset as apiDeletePreset,
   toggleSessionMode as apiToggleMode,
   emergencyStopAllReal as apiEmergencyStop,
+  setSessionNotifyDiscord as apiSetNotifyDiscord,
+  setSessionNotifyAccountIds as apiSetNotifyAccountIds,
   subscribeTicks,
 } from "../lib/live";
 import { getMarketData, autoUpdateAllMarkets } from "../lib/api";
@@ -52,6 +54,12 @@ interface LiveTradingState {
   /// Stop all running real sessions. Returns affected ids for the caller
   /// to surface in a toast.
   emergencyStopAllReal: () => Promise<number[]>;
+  /// paper 세션의 Discord 알림 토글. real 세션은 항상 알림이 가므로 호출이 무해.
+  /// optimistic update — 백엔드 실패 시 이전 값으로 롤백.
+  setSessionNotifyDiscord: (id: number, value: boolean) => Promise<void>;
+  /// Paper 세션의 알림 fan-out 계정 목록 갱신. 빈 array면 알림 off.
+  /// optimistic update + 실패 시 롤백.
+  setSessionNotifyAccountIds: (id: number, accountIds: number[]) => Promise<void>;
 
   toggleSessionVisibility: (id: number) => void;
   setAllSessionsVisible: (visible: boolean) => void;
@@ -160,6 +168,36 @@ export const useLiveTradingStore = create<LiveTradingState>((set, get) => ({
     // Drop the deleted session from the hidden set so the array doesn't
     // accumulate stale ids over time.
     set((s) => ({ hiddenSessionIds: s.hiddenSessionIds.filter((x) => x !== id) }));
+  },
+
+  setSessionNotifyDiscord: async (id, value) => {
+    // optimistic update — 토글 응답성이 중요(체크박스가 즉시 반응).
+    const prev = get().sessions;
+    set({
+      sessions: prev.map((s) => (s.id === id ? { ...s, notify_discord: value } : s)),
+    });
+    try {
+      await apiSetNotifyDiscord(id, value);
+    } catch (e) {
+      // 롤백 후 에러 재전파.
+      set({ sessions: prev });
+      throw e;
+    }
+  },
+
+  setSessionNotifyAccountIds: async (id, accountIds) => {
+    const prev = get().sessions;
+    set({
+      sessions: prev.map((s) =>
+        s.id === id ? { ...s, notify_account_ids: accountIds } : s,
+      ),
+    });
+    try {
+      await apiSetNotifyAccountIds(id, accountIds);
+    } catch (e) {
+      set({ sessions: prev });
+      throw e;
+    }
   },
 
   toggleSessionVisibility: (id) => {

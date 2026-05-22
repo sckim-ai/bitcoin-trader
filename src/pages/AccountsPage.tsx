@@ -8,6 +8,7 @@ import { confirmDialog } from "../components/ui/ConfirmDialog";
 import {
   listUpbitAccounts,
   testUpbitAccountConnection,
+  testAccountDiscord,
   setUpbitAccountEnabled,
   deleteUpbitAccount,
 } from "../lib/live";
@@ -19,8 +20,11 @@ export default function AccountsPage() {
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
 
-  // Per-account test state
+  // Per-account test state — 키 연결 테스트와 Discord 테스트가 같은 result line을
+  // 공유한다(카드 공간 절약). 마지막 액션의 결과만 표시되고, 메시지 prefix("연결 …" /
+  // "Discord …")로 어떤 액션인지 구분된다.
   const [testing, setTesting] = useState<Record<number, boolean>>({});
+  const [testingDiscord, setTestingDiscord] = useState<Record<number, boolean>>({});
   const [testResults, setTestResults] = useState<Record<number, string | null>>({});
 
   const refresh = async () => {
@@ -47,6 +51,20 @@ export default function AccountsPage() {
       setTestResults((s) => ({ ...s, [id]: `✗ 실패: ${msg}` }));
     } finally {
       setTesting((s) => ({ ...s, [id]: false }));
+    }
+  };
+
+  const handleTestDiscord = async (id: number) => {
+    setTestingDiscord((s) => ({ ...s, [id]: true }));
+    setTestResults((s) => ({ ...s, [id]: "⏳ Discord 전송 중…" }));
+    try {
+      const msg = await testAccountDiscord(id);
+      setTestResults((s) => ({ ...s, [id]: msg }));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setTestResults((s) => ({ ...s, [id]: `✗ Discord 실패: ${msg}` }));
+    } finally {
+      setTestingDiscord((s) => ({ ...s, [id]: false }));
     }
   };
 
@@ -120,10 +138,12 @@ export default function AccountsPage() {
               key={account.id}
               account={account}
               onTest={handleTest}
+              onTestDiscord={handleTestDiscord}
               onEdit={handleEdit}
               onDelete={handleDelete}
               onToggleEnabled={handleToggleEnabled}
               testing={testing[account.id]}
+              testingDiscord={testingDiscord[account.id]}
               testResult={testResults[account.id]}
             />
           ))}

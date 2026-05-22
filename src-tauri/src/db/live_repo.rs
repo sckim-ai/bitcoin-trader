@@ -96,6 +96,8 @@ pub fn insert_session(
     // real_started_at = created_at = now. start_ts may be earlier (preset's
     // backtest window start). live_return is the cumulative % from
     // real_started_at onward; starts at 0.
+    // notify_discord은 DB 컬럼 DEFAULT 0이 적용되며, 명시적 켜기는 호출자가
+    // set_session_notify_discord로 후속 처리한다(시그니처 안정성 우선).
     let now = Utc::now().to_rfc3339();
     conn.execute(
         "INSERT INTO live_sessions
@@ -116,7 +118,8 @@ pub fn get_session(conn: &Connection, id: i64) -> Result<Option<LiveSession>> {
                 ls.current_equity, ls.live_return, ls.max_daily_loss_pct, ls.max_daily_trades,
                 ls.max_order_krw, ls.created_at,
                 ls.upbit_account_id, ua.label AS account_label,
-                ua.discord_webhook_url AS account_discord_webhook
+                ua.discord_webhook_url AS account_discord_webhook,
+                ls.notify_discord, ls.notify_account_ids
          FROM live_sessions ls
          LEFT JOIN upbit_accounts ua ON ua.id = ls.upbit_account_id
          WHERE ls.id = ?1",
@@ -134,7 +137,8 @@ pub fn list_sessions(conn: &Connection, user_id: i64) -> Result<Vec<LiveSession>
                 ls.current_equity, ls.live_return, ls.max_daily_loss_pct, ls.max_daily_trades,
                 ls.max_order_krw, ls.created_at,
                 ls.upbit_account_id, ua.label AS account_label,
-                ua.discord_webhook_url AS account_discord_webhook
+                ua.discord_webhook_url AS account_discord_webhook,
+                ls.notify_discord, ls.notify_account_ids
          FROM live_sessions ls
          LEFT JOIN upbit_accounts ua ON ua.id = ls.upbit_account_id
          WHERE ls.user_id = ?1 ORDER BY ls.created_at DESC",
@@ -151,7 +155,8 @@ pub fn list_running_sessions(conn: &Connection) -> Result<Vec<LiveSession>> {
                 ls.current_equity, ls.live_return, ls.max_daily_loss_pct, ls.max_daily_trades,
                 ls.max_order_krw, ls.created_at,
                 ls.upbit_account_id, ua.label AS account_label,
-                ua.discord_webhook_url AS account_discord_webhook
+                ua.discord_webhook_url AS account_discord_webhook,
+                ls.notify_discord, ls.notify_account_ids
          FROM live_sessions ls
          LEFT JOIN upbit_accounts ua ON ua.id = ls.upbit_account_id
          WHERE ls.status = 'running'",
@@ -199,6 +204,29 @@ pub fn set_session_max_order_krw(conn: &Connection, id: i64, cap: Option<f64>) -
     conn.execute(
         "UPDATE live_sessions SET max_order_krw = ?1 WHERE id = ?2",
         params![cap, id],
+    )
+}
+
+/// paper 세션 디스코드 알림 토글. real 세션에도 호출 가능하나 알림 정책상 효과 없음
+/// (real은 이 플래그와 무관하게 항상 알림 발송).
+pub fn set_session_notify_discord(conn: &Connection, id: i64, value: bool) -> Result<usize> {
+    conn.execute(
+        "UPDATE live_sessions SET notify_discord = ?1 WHERE id = ?2",
+        params![value as i64, id],
+    )
+}
+
+/// Paper 세션의 알림 fan-out 계정 목록을 갱신. 빈 array는 알림 off로 해석된다.
+/// JSON 직렬화 실패는 파라미터 입력 오류일 때만 발생하므로 호출자에게 그대로 전파.
+pub fn set_session_notify_account_ids(
+    conn: &Connection,
+    id: i64,
+    ids: &[i64],
+) -> Result<usize> {
+    let json = serde_json::to_string(ids).unwrap_or_else(|_| "[]".to_string());
+    conn.execute(
+        "UPDATE live_sessions SET notify_account_ids = ?1 WHERE id = ?2",
+        params![json, id],
     )
 }
 
@@ -317,6 +345,13 @@ fn row_to_session(row: &rusqlite::Row) -> Result<LiveSession> {
         upbit_account_id: row.get(21)?,
         account_label: row.get(22)?,
         account_discord_webhook: row.get(23)?,
+        notify_discord: row.get::<_, i64>(24)? != 0,
+        // JSON 파싱 실패 시 빈 array — 옛 row(컬럼 누락) 또는 잘못 저장된 데이터에
+        // 대한 방어. 파싱 실패가 알림을 켜는 사고를 만들지 않도록 fail-closed.
+        notify_account_ids: serde_json::from_str(
+            row.get::<_, String>(25).as_deref().unwrap_or("[]"),
+        )
+        .unwrap_or_default(),
     })
 }
 

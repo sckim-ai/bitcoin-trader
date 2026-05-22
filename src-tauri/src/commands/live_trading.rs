@@ -98,6 +98,10 @@ pub struct CreateSessionArgs {
     /// Optional per-session BUY cap in KRW. None / omitted → use full balance.
     #[serde(default)]
     pub max_order_krw: Option<f64>,
+    /// paper 세션 Discord 알림 토글. real 세션은 항상 알림이 가므로 무관.
+    /// 기본값 false — paper N개 노이즈 방지.
+    #[serde(default)]
+    pub notify_discord: bool,
 }
 
 /// Normalize a preset's since_ts ("YYYY-MM-DD" or RFC3339) to an RFC3339
@@ -155,6 +159,10 @@ pub fn create_session(
                 .map_err(|e| e.to_string())?;
         }
     }
+    if args.notify_discord {
+        live_repo::set_session_notify_discord(&conn, id, true)
+            .map_err(|e| e.to_string())?;
+    }
     Ok(id)
 }
 
@@ -168,6 +176,33 @@ pub fn set_session_order_cap(
     // Treat 0 / negative as "clear cap". Frontend passes None to clear too.
     let normalized = max_order_krw.filter(|&v| v > 0.0);
     live_repo::set_session_max_order_krw(&conn, id, normalized)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// paper 세션의 Discord 알림 토글. real 세션은 항상 알림이 가므로 호출이 무해(no-op 같은 효과).
+/// 016 도입 boolean 토글 — 새 UI는 `set_session_notify_account_ids` 사용.
+#[tauri::command]
+pub fn set_session_notify_discord(
+    id: i64,
+    value: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    live_repo::set_session_notify_discord(&conn, id, value).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Paper 세션의 알림 fan-out 계정 목록을 갱신. 빈 array면 알림 off.
+/// Real 세션에 대해 호출돼도 DB는 갱신되지만, 알림 정책상 효과 없음.
+#[tauri::command]
+pub fn set_session_notify_account_ids(
+    id: i64,
+    account_ids: Vec<i64>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    live_repo::set_session_notify_account_ids(&conn, id, &account_ids)
         .map_err(|e| e.to_string())?;
     Ok(())
 }

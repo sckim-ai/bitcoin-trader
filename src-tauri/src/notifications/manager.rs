@@ -31,6 +31,10 @@ pub struct NotificationManager {
     /// Prepended to Discord messages only. e.g. "[Main Account] "
     /// Empty string means no prefix (single-account or unknown account).
     account_prefix: String,
+    /// paper 세션 알림이면 true — 제목 앞 "📄 PAPER" + 회색 톤 색상.
+    /// 다중 사용자 시청 환경에서 시뮬레이션 알림을 실주문 알림과 시각적으로
+    /// 명확히 구분하기 위함.
+    paper_mode: bool,
 }
 
 impl NotificationManager {
@@ -43,6 +47,7 @@ impl NotificationManager {
             telegram: None,
             fcm_device_token: String::new(),
             account_prefix: String::new(),
+            paper_mode: false,
         };
 
         let mut stmt = match conn.prepare(
@@ -121,6 +126,23 @@ impl NotificationManager {
         if let Some(u) = url.map(str::trim).filter(|s| !s.is_empty()) {
             self.discord = Some(DiscordClient::new(u.to_string()));
         }
+        self
+    }
+
+    /// 이 알림이 paper 세션에서 나가는 것임을 표시. true면 모든 embed의 제목 앞에
+    /// "📄 PAPER " 를 붙이고 색을 회색 톤으로 dimming한다.
+    pub fn with_paper_mode(mut self, paper: bool) -> Self {
+        self.paper_mode = paper;
+        self
+    }
+
+    /// Telegram/FCM 클라이언트를 비활성화 — Discord만 전송. Paper 알림이 N개
+    /// 계정 webhook으로 fan-out될 때 텔레그램/FCM이 N번 중복 발송되는 것을 막기
+    /// 위함. 글로벌 텔레그램/FCM 채널이 paper 알림을 받지 못하는 trade-off는
+    /// 의도된 단순화 (paper는 Discord 다중 채널이 주 용도).
+    pub fn discord_only(mut self) -> Self {
+        self.fcm = None;
+        self.telegram = None;
         self
     }
 
@@ -325,7 +347,10 @@ impl NotificationManager {
         let is_buy = side == "buy";
         // Legacy colors: 0x00FF00 (green) / 0xFF0000 (red). Late cycle is
         // dimmed ~60% to differentiate from synchronous fills.
-        let color: u32 = if late {
+        // paper 모드는 회색 톤(녹/적 dim된 회색)으로 시뮬레이션임을 시각화.
+        let color: u32 = if self.paper_mode {
+            if is_buy { 0x88AA88 } else { 0xAA8888 }
+        } else if late {
             if is_buy { 0x009933 } else { 0x993333 }
         } else if is_buy { 0x00FF00 } else { 0xFF0000 };
         let title_emoji = match (is_buy, late) {
@@ -334,7 +359,12 @@ impl NotificationManager {
             (false, false) => "📉",
             (false, true) => "⏱📉",
         };
-        let title = format!("{} {} 체결", title_emoji, if is_buy { "매수" } else { "매도" });
+        let title = format!(
+            "{}{} {} 체결",
+            if self.paper_mode { "📄 PAPER " } else { "" },
+            title_emoji,
+            if is_buy { "매수" } else { "매도" },
+        );
         let kst = (chrono::Utc::now() + chrono::Duration::hours(9))
             .format("%Y-%m-%d %H:%M:%S")
             .to_string();
@@ -411,8 +441,16 @@ impl NotificationManager {
         session_label: Option<&str>,
     ) {
         let is_buy = side == "buy";
-        let title = if is_buy { "⚠️ 매수 대기 (BUY READY)" } else { "⚠️ 매도 대기 (SELL READY)" };
-        let color: u32 = if is_buy { 0xFFA500 } else { 0xFF6347 };
+        let base_title = if is_buy { "⚠️ 매수 대기 (BUY READY)" } else { "⚠️ 매도 대기 (SELL READY)" };
+        let title: String = if self.paper_mode {
+            format!("📄 PAPER {base_title}")
+        } else {
+            base_title.to_string()
+        };
+        // paper는 ready 색상도 회색 톤으로 dimming.
+        let color: u32 = if self.paper_mode {
+            0x999999
+        } else if is_buy { 0xFFA500 } else { 0xFF6347 };
         let kst = (chrono::Utc::now() + chrono::Duration::hours(9))
             .format("%Y-%m-%d %H:%M:%S")
             .to_string();
@@ -454,8 +492,16 @@ impl NotificationManager {
         session_label: Option<&str>,
     ) {
         let is_buy = side == "buy";
-        let title = if is_buy { "📥 매수 주문 등록 (LIMIT WAIT)" } else { "📤 매도 주문 등록 (LIMIT WAIT)" };
-        let color: u32 = if is_buy { 0x4FC3F7 } else { 0xFF8A65 }; // light blue / soft orange
+        let base_title = if is_buy { "📥 매수 주문 등록 (LIMIT WAIT)" } else { "📤 매도 주문 등록 (LIMIT WAIT)" };
+        let title: String = if self.paper_mode {
+            format!("📄 PAPER {base_title}")
+        } else {
+            base_title.to_string()
+        };
+        // paper는 회색 톤(원래 light blue / soft orange).
+        let color: u32 = if self.paper_mode {
+            0x999999
+        } else if is_buy { 0x4FC3F7 } else { 0xFF8A65 };
         let kst = (chrono::Utc::now() + chrono::Duration::hours(9))
             .format("%Y-%m-%d %H:%M:%S")
             .to_string();

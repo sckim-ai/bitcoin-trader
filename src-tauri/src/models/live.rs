@@ -118,6 +118,15 @@ pub struct LiveSession {
     /// 알림 전송 경로에서만 사용되며 UI에는 노출하지 않음.
     #[serde(default)]
     pub account_discord_webhook: Option<String>,
+    /// (Deprecated, kept for backward-compat) — 016의 boolean 토글. 새 로직은
+    /// `notify_account_ids`만 참조한다. 폐기 예정.
+    #[serde(default)]
+    pub notify_discord: bool,
+    /// Paper 세션 알림을 발송할 Upbit 계정 ID 목록. 각 계정의 `discord_webhook_url`
+    /// 으로 N번 fan-out 된다. 빈 array = 알림 off.
+    /// Real 세션은 이 필드를 참조하지 않음 (자기 계정 webhook만 사용).
+    #[serde(default)]
+    pub notify_account_ids: Vec<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

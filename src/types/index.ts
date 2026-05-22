@@ -236,6 +236,10 @@ export interface LiveSession {
   account_label: string | null;
   /** 알림 전송 경로에서만 사용. UI에 표시하지 않음. */
   account_discord_webhook?: string | null;
+  /** (Deprecated) 016 boolean 토글. 새 UI는 notify_account_ids 사용. */
+  notify_discord?: boolean;
+  /** Paper 세션 알림을 fan-out할 Upbit 계정 ID 목록. [] = 알림 off. */
+  notify_account_ids?: number[];
   created_at: string;
 }
 
@@ -260,6 +264,8 @@ export interface CreateSessionArgs {
   initial_capital: number;
   /** Optional per-session BUY cap in KRW. Null/omitted = no cap. */
   max_order_krw?: number | null;
+  /** paper 세션 Discord 알림 토글. real은 항상 알림이 가므로 무관. 기본 false. */
+  notify_discord?: boolean;
 }
 
 export interface SessionCycleOutput {

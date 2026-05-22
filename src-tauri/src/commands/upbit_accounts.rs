@@ -112,6 +112,74 @@ pub async fn test_upbit_account_connection(id: i64) -> Result<usize, String> {
     Ok(balances.len())
 }
 
+/// 계정별 Discord webhook 테스트 — 알림 라우팅 정책(계정 webhook → 글로벌 fallback)을
+/// 그대로 거쳐서 단일 텍스트 메시지를 전송. 사용자가 "이 계정이 실제로 어디로 가는지"를
+/// 확인할 수 있도록 결과에 "계정 전용 채널" / "글로벌 fallback" 라벨을 포함한다.
+#[tauri::command]
+pub async fn test_account_discord(
+    account_id: i64,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    use crate::notifications::discord::DiscordClient;
+
+    // Phase 1: 정보 수집 (lock 해제 후 await)
+    let (webhook_url, label, used_fallback) = {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        let account = upbit_accounts_repo::get_account(&conn, account_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "계정을 찾을 수 없습니다.".to_string())?;
+
+        let account_url = account
+            .discord_webhook_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from);
+
+        match account_url {
+            Some(u) => (u, account.label, false),
+            None => {
+                // 글로벌 fallback — notification_configs에서 enabled=1인 discord 행 사용.
+                // enabled=0이면 라이브 알림도 안 나가므로 테스트도 같은 정책.
+                let global = conn
+                    .query_row(
+                        "SELECT config FROM notification_configs
+                         WHERE user_id = 1 AND channel = 'discord' AND enabled = 1",
+                        [],
+                        |r| r.get::<_, String>(0),
+                    )
+                    .ok()
+                    .and_then(|cfg| serde_json::from_str::<serde_json::Value>(&cfg).ok())
+                    .and_then(|v| v["webhook_url"].as_str().map(String::from))
+                    .filter(|s| !s.is_empty());
+
+                match global {
+                    Some(u) => (u, account.label, true),
+                    None => {
+                        return Err(
+                            "이 계정에도, Settings 글로벌에도 Discord webhook이 설정되어 있지 않습니다."
+                                .to_string(),
+                        );
+                    }
+                }
+            }
+        }
+    };
+
+    let route = if used_fallback { "글로벌 fallback" } else { "계정 전용 채널" };
+    let msg = format!("[{label}] BTC Trader Discord 테스트 — {route}");
+    DiscordClient::new(webhook_url)
+        .send(&msg)
+        .await
+        .map_err(|e| format!("Discord 전송 실패: {e}"))?;
+
+    Ok(if used_fallback {
+        format!("✓ '{label}' — 계정 webhook 없어 글로벌 채널로 전송됨")
+    } else {
+        format!("✓ '{label}' — 계정 전용 채널로 전송 완료")
+    })
+}
+
 fn guard_no_running(conn: &rusqlite::Connection, account_id: i64) -> Result<(), String> {
     let n = upbit_accounts_repo::count_running_sessions(conn, account_id)
         .map_err(|e| e.to_string())?;
