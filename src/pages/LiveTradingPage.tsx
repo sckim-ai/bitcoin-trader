@@ -3,7 +3,7 @@ import { Button } from "../components/ui/Button";
 import { Card, CardContent, CardHeader } from "../components/ui/Card";
 import { Badge } from "../components/ui/Badge";
 import { confirmDialog } from "../components/ui/ConfirmDialog";
-import { Plus, Trash2, AlertOctagon } from "lucide-react";
+import { Plus, Trash2, AlertOctagon, LineChart } from "lucide-react";
 import SessionTable from "../components/live/SessionTable";
 import NewSessionDialog from "../components/live/NewSessionDialog";
 import LiveLogPanel from "../components/live/LiveLogPanel";
@@ -16,6 +16,7 @@ import CandleChart from "../components/live/CandleChart";
 import { colorFor } from "../components/live/charts/sessionPalette";
 import type { LiveSession, LiveTrade, MarketData } from "../types";
 import { useLiveTradingStore } from "../stores/liveTradingStore";
+import { runSimulation } from "../lib/api";
 
 const defaultRangeStart = (): string => {
   const d = new Date();
@@ -113,6 +114,41 @@ export default function LiveTradingPage() {
 
   // Which session's signal log to render in the strip chart.
   const [stripSessionId, setStripSessionId] = useState<number | null>(null);
+
+  // Forward re-simulation of each preset from its sim end (until_ts) → now.
+  // Ephemeral: held in component state, recomputed each time the user clicks
+  // Simulate so the numbers always reflect the current moment.
+  const [simResults, setSimResults] = useState<
+    Record<number, { ret: number; win: number; trades: number }>
+  >({});
+  const [simProgress, setSimProgress] = useState<{ done: number; total: number } | null>(null);
+
+  const runForwardSims = async () => {
+    // Skip presets with no market — nothing to simulate against.
+    const targets = presets.filter((p) => p.market);
+    setSimProgress({ done: 0, total: targets.length });
+    const next: Record<number, { ret: number; win: number; trades: number }> = {};
+    for (let i = 0; i < targets.length; i++) {
+      const p = targets[i];
+      try {
+        const params = JSON.parse(p.params_json) as Record<string, number>;
+        const r = await runSimulation(
+          p.strategy_key,
+          p.market!,
+          p.timeframe ?? "hour",
+          params,
+          p.until_ts ?? p.since_ts ?? null, // forward window start
+          null, // until = now (latest available candle)
+        );
+        next[p.id] = { ret: r.total_return, win: r.win_rate, trades: r.total_trades };
+        setSimResults({ ...next }); // incremental: rows fill in as each finishes
+      } catch (e) {
+        console.error(`Forward sim failed for preset ${p.id}:`, e);
+      }
+      setSimProgress({ done: i + 1, total: targets.length });
+    }
+    setSimProgress(null);
+  };
 
   useEffect(() => {
     refreshAll().then(() => {
@@ -268,10 +304,22 @@ export default function LiveTradingPage() {
       )}
 
       <Card>
-        <CardHeader>
+        <CardHeader className="flex items-center justify-between">
           <h3 className="text-sm font-semibold text-zinc-300">
             Presets ({presets.length})
           </h3>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={runForwardSims}
+            disabled={presets.length === 0 || simProgress !== null}
+            title="각 preset을 시뮬 종료 시점 → 현재까지 재시뮬레이션"
+          >
+            <LineChart size={14} />
+            {simProgress
+              ? `Simulating… (${simProgress.done}/${simProgress.total})`
+              : "Simulate"}
+          </Button>
         </CardHeader>
         <CardContent>
           {presets.length === 0 ? (
@@ -289,6 +337,9 @@ export default function LiveTradingPage() {
                   <th className="text-left">Timeframe</th>
                   <th className="text-left">Window</th>
                   <th className="text-left">Source</th>
+                  <th className="text-right" title="시뮬 종료 → 현재 구간 수익률">수익률</th>
+                  <th className="text-right" title="포워드 구간 승률">승률</th>
+                  <th className="text-right" title="포워드 구간 거래 수">거래수</th>
                   <th></th>
                 </tr>
               </thead>
@@ -303,6 +354,30 @@ export default function LiveTradingPage() {
                       {p.since_ts && p.until_ts ? `${p.since_ts} ~ ${p.until_ts}` : "--"}
                     </td>
                     <td className="text-zinc-500">{p.source}</td>
+                    {(() => {
+                      const sr = simResults[p.id];
+                      const dash = <span className="text-zinc-600">--</span>;
+                      return (
+                        <>
+                          <td className="text-right font-data">
+                            {sr ? (
+                              <span className={sr.ret >= 0 ? "text-emerald-400" : "text-rose-400"}>
+                                {sr.ret >= 0 ? "+" : ""}
+                                {sr.ret.toFixed(2)}%
+                              </span>
+                            ) : (
+                              dash
+                            )}
+                          </td>
+                          <td className="text-right font-data text-zinc-300">
+                            {sr ? `${sr.win.toFixed(1)}%` : dash}
+                          </td>
+                          <td className="text-right font-data text-zinc-300">
+                            {sr ? sr.trades : dash}
+                          </td>
+                        </>
+                      );
+                    })()}
                     <td className="text-right">
                       <Button
                         size="sm"

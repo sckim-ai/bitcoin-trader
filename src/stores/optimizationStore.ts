@@ -92,11 +92,12 @@ interface OptimizationState {
 }
 
 function toEvent(runId: number, view: OptimizationGenerationView): GenerationEvent {
-  const bestReturn = view.solutions.reduce(
+  const solutions = sanitizeFront(view.solutions);
+  const bestReturn = solutions.reduce(
     (acc, s) => Math.max(acc, s.metrics?.total_return ?? s.objectives[0] ?? 0),
     -Infinity
   );
-  const bestWinRate = view.solutions.reduce(
+  const bestWinRate = solutions.reduce(
     (acc, s) => Math.max(acc, s.metrics?.win_rate ?? s.objectives[1] ?? 0),
     -Infinity
   );
@@ -107,7 +108,42 @@ function toEvent(runId: number, view: OptimizationGenerationView): GenerationEve
     best_return: Number.isFinite(bestReturn) ? bestReturn : 0,
     best_win_rate: Number.isFinite(bestWinRate) ? bestWinRate : 0,
     front_size: view.solutions.length,
-    front: view.solutions,
+    front: solutions,
+  };
+}
+
+const LIVE_HISTORY_LIMIT = 120;
+const FRONT_DISPLAY_LIMIT = 50;
+
+function finite(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function sanitizeRecord(input: Record<string, number> | undefined): Record<string, number> {
+  if (!input) return {};
+  return Object.fromEntries(Object.entries(input).map(([k, v]) => [k, finite(v)]));
+}
+
+function sanitizeSolution(s: ParetoSolution): ParetoSolution {
+  return {
+    ...s,
+    objectives: (s.objectives ?? []).map(finite),
+    parameters: sanitizeRecord(s.parameters),
+    metrics: sanitizeRecord(s.metrics),
+    crowding_distance: finite(s.crowding_distance),
+  };
+}
+
+function sanitizeFront(front: ParetoSolution[]): ParetoSolution[] {
+  return (front ?? []).slice(0, FRONT_DISPLAY_LIMIT).map(sanitizeSolution);
+}
+
+function sanitizeEvent(ev: GenerationEvent): GenerationEvent {
+  return {
+    ...ev,
+    best_return: finite(ev.best_return),
+    best_win_rate: finite(ev.best_win_rate),
+    front: sanitizeFront(ev.front),
   };
 }
 
@@ -144,11 +180,14 @@ export const useOptimizationStore = create<OptimizationState>((set) => ({
   patchConfig: (patch) => set(patch),
   setSelectedObjectives: (o) => set({ selectedObjectives: o }),
   onGenerationEvent: (ev) =>
-    set((state) => ({
-      progress: ev,
-      genHistory: [...state.genHistory, ev],
-      selectedGen: ev.generation,
-    })),
+    set((state) => {
+      const safe = sanitizeEvent(ev);
+      return {
+        progress: safe,
+        genHistory: [...state.genHistory, safe].slice(-LIVE_HISTORY_LIMIT),
+        selectedGen: safe.generation,
+      };
+    }),
   onCompletionEvent: (ev) =>
     set((state) => ({
       running: false,

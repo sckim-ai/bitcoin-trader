@@ -820,8 +820,10 @@ async fn paper_notify_step(
         if buy_fired {
             let buy_price = result.last_buy_price;
             let rough_volume = if buy_price > 0.0 { session_initial / buy_price } else { 0.0 };
+            // total_value_krw는 의도적으로 None — paper의 volume이 rough estimate
+            // (initial/buy_price)라 매번 ~100% 근처의 의미 없는 비율이 계산되어 표시되는
+            // 것을 막는다. 세션 수익 %는 session_pnl_pct로 별도 표시.
             let ctx = crate::notifications::manager::TradeContext {
-                total_value_krw: Some(equity),
                 session_label: Some(&session.label),
                 session_initial: Some(session_initial),
                 session_pnl_pct: Some(session_pnl_pct),

@@ -13,6 +13,12 @@ import SavePresetDialog from "../components/live/SavePresetDialog";
 import LoadPresetDialog from "../components/live/LoadPresetDialog";
 import { savePreset } from "../lib/live";
 
+// Ratio metrics arrive as null when their denominator was zero (serde_json
+// turns Rust f64::INFINITY/NaN into JSON null). Render a placeholder instead
+// of crashing on .toFixed(). null on profit_factor means "no losing trades".
+const fmtMetric = (n: number | null | undefined, digits: number, nullLabel = "—") =>
+  n == null || !Number.isFinite(n) ? nullLabel : n.toFixed(digits);
+
 const MARKET_OPTIONS = [
   { value: "BTC", label: "BTC" },
   { value: "ETH", label: "ETH" },
@@ -324,8 +330,8 @@ export default function SimulationPage() {
               />
               <MetricCard
                 label="Profit Factor"
-                value={result.profit_factor.toFixed(2)}
-                color={result.profit_factor >= 1 ? "green" : "red"}
+                value={fmtMetric(result.profit_factor, 2, "∞")}
+                color={(result.profit_factor ?? Infinity) >= 1 ? "green" : "red"}
               />
               <MetricCard
                 label="Max Drawdown"
@@ -334,13 +340,13 @@ export default function SimulationPage() {
               />
               <MetricCard
                 label="Sharpe Ratio"
-                value={result.sharpe_ratio.toFixed(3)}
-                color={result.sharpe_ratio > 0 ? "green" : "red"}
+                value={fmtMetric(result.sharpe_ratio, 3)}
+                color={(result.sharpe_ratio ?? 0) > 0 ? "green" : "red"}
               />
               <MetricCard
                 label="Sortino Ratio"
-                value={result.sortino_ratio.toFixed(3)}
-                color={result.sortino_ratio > 0 ? "green" : "red"}
+                value={fmtMetric(result.sortino_ratio, 3, "∞")}
+                color={(result.sortino_ratio ?? Infinity) > 0 ? "green" : "red"}
               />
               <MetricCard
                 label="Annual Return"

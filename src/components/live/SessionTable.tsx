@@ -91,15 +91,19 @@ export default function SessionTable({
               <td className="font-medium text-zinc-200">
                 <div className="flex flex-col gap-0.5 leading-tight">
                   <span>{s.label}</span>
-                  {s.account_label ? (
-                    <Badge variant="default" className="self-start text-[10px] px-1 py-0">
-                      [{s.account_label}]
-                    </Badge>
-                  ) : s.upbit_account_id !== null ? (
-                    <Badge variant="default" className="self-start text-[10px] px-1 py-0 opacity-50">
-                      [삭제됨]
-                    </Badge>
-                  ) : null}
+                  {/* 계정 배지는 real 모드일 때만. paper로 되돌리면 바인딩은 보존되지만
+                      (재승급 기본 선택용) 라벨은 숨긴다 — paper는 계정을 쓰지 않음. */}
+                  {s.mode === "real" && (
+                    s.account_label ? (
+                      <Badge variant="default" className="self-start text-[10px] px-1 py-0">
+                        [{s.account_label}]
+                      </Badge>
+                    ) : s.upbit_account_id !== null ? (
+                      <Badge variant="default" className="self-start text-[10px] px-1 py-0 opacity-50">
+                        [삭제됨]
+                      </Badge>
+                    ) : null
+                  )}
                 </div>
               </td>
               <td className="text-zinc-400">{s.market}</td>

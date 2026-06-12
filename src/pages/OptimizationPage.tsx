@@ -777,9 +777,12 @@ export default function OptimizationPage() {
 /// Metric lookup that prefers the backend-supplied full map and falls back
 /// to the 2-tuple objectives array for legacy rows (pre-migration 004).
 function metricValue(s: ParetoSolution, key: string): number | null {
-  if (s.metrics && key in s.metrics) return s.metrics[key];
+  if (s.metrics && key in s.metrics) {
+    const value = s.metrics[key];
+    return Number.isFinite(value) ? value : null;
+  }
   // Legacy: only total_return & win_rate were stored as the first two objectives.
-  if (key === "total_return") return s.objectives[0] ?? null;
-  if (key === "win_rate") return s.objectives[1] ?? null;
+  if (key === "total_return") return Number.isFinite(s.objectives[0]) ? s.objectives[0] : null;
+  if (key === "win_rate") return Number.isFinite(s.objectives[1]) ? s.objectives[1] : null;
   return null;
 }

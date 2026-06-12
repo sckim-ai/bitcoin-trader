@@ -73,17 +73,26 @@ struct CompletionEvent {
     error: Option<String>,
 }
 
+fn finite_or_zero(value: f64) -> f64 {
+    if value.is_finite() { value } else { 0.0 }
+}
+
 fn individual_to_solution(ind: &Individual, param_names: &[String]) -> ParetoSolution {
     let mut parameters = HashMap::new();
     for name in param_names {
-        parameters.insert(name.clone(), get_parameter(&ind.parameters, name));
+        parameters.insert(name.clone(), finite_or_zero(get_parameter(&ind.parameters, name)));
     }
+    let metrics = ind
+        .metrics
+        .iter()
+        .map(|(k, v)| (k.clone(), finite_or_zero(*v)))
+        .collect();
     ParetoSolution {
-        objectives: ind.objectives.clone(),
+        objectives: ind.objectives.iter().map(|v| finite_or_zero(*v)).collect(),
         parameters,
-        metrics: ind.metrics.clone(),
+        metrics,
         rank: ind.rank,
-        crowding_distance: ind.crowding_distance,
+        crowding_distance: finite_or_zero(ind.crowding_distance),
     }
 }
 
@@ -290,6 +299,7 @@ pub async fn start_optimization(
             let front: Vec<ParetoSolution> = gr
                 .front
                 .iter()
+                .take(50)
                 .map(|ind| individual_to_solution(ind, &param_names_for_cb))
                 .collect();
             let _ = app_for_cb.emit(

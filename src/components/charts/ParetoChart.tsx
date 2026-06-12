@@ -6,6 +6,13 @@ interface Props {
 }
 
 export default function ParetoChart({ solutions }: Props) {
+  const points = solutions
+    .map((s) => [
+      metricOrObjective(s, "total_return", 0),
+      metricOrObjective(s, "win_rate", 1),
+    ])
+    .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y));
+
   const option = {
     backgroundColor: "transparent",
     title: {
@@ -36,7 +43,7 @@ export default function ParetoChart({ solutions }: Props) {
       {
         type: "scatter",
         symbolSize: 10,
-        data: solutions.map((s) => s.objectives),
+        data: points,
         itemStyle: { color: "#8b5cf6" },
       },
     ],
@@ -50,4 +57,9 @@ export default function ParetoChart({ solutions }: Props) {
       notMerge
     />
   );
+}
+
+function metricOrObjective(s: ParetoSolution, metric: string, objectiveIndex: number): number {
+  const value = s.metrics?.[metric] ?? s.objectives?.[objectiveIndex] ?? 0;
+  return Number.isFinite(value) ? value : 0;
 }

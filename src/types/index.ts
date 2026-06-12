@@ -70,7 +70,9 @@ export interface SimulationResult {
   max_drawdown: number;
   total_trades: number;
   win_rate: number;
-  profit_factor: number;
+  // serde_json serializes Rust f64::INFINITY / NaN as JSON `null`, so these
+  // ratio metrics (zero-denominator cases) can arrive as null on the wire.
+  profit_factor: number | null;
   avg_trade_return: number;
   max_consecutive_losses: number;
   buy_signals: number;
@@ -84,9 +86,9 @@ export interface SimulationResult {
   last_highest_since_buy: number;
   trades: TradeRecord[];
   signal_log: SignalEvent[];
-  sharpe_ratio: number;
-  sortino_ratio: number;
-  calmar_ratio: number;
+  sharpe_ratio: number | null;
+  sortino_ratio: number | null;
+  calmar_ratio: number | null;
   annual_return: number;
 }
 

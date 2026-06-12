@@ -118,6 +118,15 @@ pub struct TradingParameters {
     #[serde(default = "d_v31_urg_sell_mult")]      pub v31_urgent_sell_tv_mult: f64,
     #[serde(default = "d_v31_sell_ready_rise")]    pub v31_sell_ready_price_rise: f64,
     #[serde(default = "d_v31_sell_wait_max")]      pub v31_sell_wait_max: i32,
+
+    // V6 HybridAdaptive risk overlays. V6 reuses v31_* trade-value thresholds
+    // and v5_* dual-PSY confirmation, then adds ATR exits and optional ADX.
+    #[serde(default = "d_v6_atr_stop_mult")]
+    pub v6_atr_stop_mult: f64,
+    #[serde(default = "d_v6_atr_trail_mult")]
+    pub v6_atr_trail_mult: f64,
+    #[serde(default = "d_v6_min_adx")]
+    pub v6_min_adx: f64,
 }
 
 fn default_v5_buy_psy_hour_lo() -> f64 { 0.05 }
@@ -164,6 +173,9 @@ fn d_v31_cutoff_mult()     -> f64 { 1.0 }
 fn d_v31_urg_sell_mult()   -> f64 { 2.0 }
 fn d_v31_sell_ready_rise() -> f64 { 1.0 }
 fn d_v31_sell_wait_max()   -> i32 { 168 }
+fn d_v6_atr_stop_mult()    -> f64 { 3.5 }
+fn d_v6_atr_trail_mult()   -> f64 { 4.0 }
+fn d_v6_min_adx()          -> f64 { 0.0 }
 
 impl TradingParameters {
     /// Market-aware defaults. Volume thresholds are calibrated against ETH/hour
@@ -287,6 +299,9 @@ impl Default for TradingParameters {
             v31_urgent_sell_tv_mult: d_v31_urg_sell_mult(),
             v31_sell_ready_price_rise: d_v31_sell_ready_rise(),
             v31_sell_wait_max: d_v31_sell_wait_max(),
+            v6_atr_stop_mult: d_v6_atr_stop_mult(),
+            v6_atr_trail_mult: d_v6_atr_trail_mult(),
+            v6_min_adx: d_v6_min_adx(),
         }
     }
 }

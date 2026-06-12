@@ -369,23 +369,18 @@ impl NotificationManager {
             .format("%Y-%m-%d %H:%M:%S")
             .to_string();
 
-        // 다중 사용자 시청 환경 — 디스코드 embed는 절대값(가격/수량/잔고) 대신
-        // 총평가 대비 체결금액 비율만 노출. Plain text(텔레그램/FCM)는 그대로.
-        let trade_pct = ctx.total_value_krw
-            .filter(|t| *t > 0.0)
-            .map(|t| (price * volume) / t * 100.0);
-        let trade_pct_label = if is_buy { "매수 비율" } else { "매도 비율" };
+        // 다중 사용자 시청 환경 — 가격은 공개 시세라 노출해도 자산 규모 식별
+        // 불가. 수량/잔고는 그대로 마스킹. 매수/매도 비율 % 필드는 제거된 상태
+        // (real은 분할 limit + done/wait 분리로 즉시 알림 시점에 의도 대비
+        // 정확한 비율을 산출할 수 없고, paper는 volume이 rough estimate라
+        // 항상 ~100% 근처가 되어 둘 다 의미가 없음). Plain text(텔레그램/FCM)는
+        // 본인 채널 가정으로 가격·수량·잔고 모두 그대로.
+        let price_label = if is_buy { "매수가" } else { "매도가" };
 
         let mut fields: Vec<serde_json::Value> = vec![
             json!({"name": "코인", "value": format!("`{}`", market), "inline": true}),
+            json!({"name": price_label, "value": format!("`{}` KRW", fmt_int(price)), "inline": true}),
         ];
-        if let Some(p) = trade_pct {
-            fields.push(json!({
-                "name": trade_pct_label,
-                "value": format!("`{:.2}%`", p),
-                "inline": true,
-            }));
-        }
         if !is_buy {
             if let Some(p) = pnl_pct {
                 let sign = if p >= 0.0 { "+" } else { "" };

@@ -100,6 +100,18 @@ pub fn get_parameter(params: &TradingParameters, name: &str) -> f64 {
         "v3_fee_rate" => params.v3_fee_rate,
         "v3_min_hold_bars" => params.v3_min_hold_bars as f64,
         "v3_volume_lookback" => params.v3_volume_lookback as f64,
+        "v5_buy_psy_hour_lo" => params.v5_buy_psy_hour_lo,
+        "v5_buy_psy_hour_hi" => params.v5_buy_psy_hour_hi,
+        "v5_buy_psy_hour_pow" => params.v5_buy_psy_hour_pow,
+        "v5_buy_psy_day_lo" => params.v5_buy_psy_day_lo,
+        "v5_buy_psy_day_hi" => params.v5_buy_psy_day_hi,
+        "v5_buy_psy_day_pow" => params.v5_buy_psy_day_pow,
+        "v5_sell_psy_hour_lo" => params.v5_sell_psy_hour_lo,
+        "v5_sell_psy_hour_hi" => params.v5_sell_psy_hour_hi,
+        "v5_sell_psy_hour_pow" => params.v5_sell_psy_hour_pow,
+        "v5_sell_psy_day_lo" => params.v5_sell_psy_day_lo,
+        "v5_sell_psy_day_hi" => params.v5_sell_psy_day_hi,
+        "v5_sell_psy_day_pow" => params.v5_sell_psy_day_pow,
         "v31_urgent_buy_tv_lo" => params.v31_urgent_buy_tv_lo,
         "v31_urgent_buy_tv_hi" => params.v31_urgent_buy_tv_hi,
         "v31_urgent_buy_tv_pow" => params.v31_urgent_buy_tv_pow,
@@ -143,6 +155,9 @@ pub fn get_parameter(params: &TradingParameters, name: &str) -> f64 {
         "v31_urgent_sell_tv_mult" => params.v31_urgent_sell_tv_mult,
         "v31_sell_ready_price_rise" => params.v31_sell_ready_price_rise,
         "v31_sell_wait_max" => params.v31_sell_wait_max as f64,
+        "v6_atr_stop_mult" => params.v6_atr_stop_mult,
+        "v6_atr_trail_mult" => params.v6_atr_trail_mult,
+        "v6_min_adx" => params.v6_min_adx,
         _ => 0.0,
     }
 }
@@ -190,6 +205,18 @@ pub fn set_parameter(params: &mut TradingParameters, name: &str, value: f64) {
         // 섭동하므로 3.9 → 3(trunc)처럼 음의 편향이 생기는 걸 방지. 3.9 → 4(round).
         "v3_min_hold_bars" => params.v3_min_hold_bars = value.round() as i32,
         "v3_volume_lookback" => params.v3_volume_lookback = value.round() as i32,
+        "v5_buy_psy_hour_lo" => params.v5_buy_psy_hour_lo = value,
+        "v5_buy_psy_hour_hi" => params.v5_buy_psy_hour_hi = value,
+        "v5_buy_psy_hour_pow" => params.v5_buy_psy_hour_pow = value,
+        "v5_buy_psy_day_lo" => params.v5_buy_psy_day_lo = value,
+        "v5_buy_psy_day_hi" => params.v5_buy_psy_day_hi = value,
+        "v5_buy_psy_day_pow" => params.v5_buy_psy_day_pow = value,
+        "v5_sell_psy_hour_lo" => params.v5_sell_psy_hour_lo = value,
+        "v5_sell_psy_hour_hi" => params.v5_sell_psy_hour_hi = value,
+        "v5_sell_psy_hour_pow" => params.v5_sell_psy_hour_pow = value,
+        "v5_sell_psy_day_lo" => params.v5_sell_psy_day_lo = value,
+        "v5_sell_psy_day_hi" => params.v5_sell_psy_day_hi = value,
+        "v5_sell_psy_day_pow" => params.v5_sell_psy_day_pow = value,
         "v31_urgent_buy_tv_lo" => params.v31_urgent_buy_tv_lo = value,
         "v31_urgent_buy_tv_hi" => params.v31_urgent_buy_tv_hi = value,
         "v31_urgent_buy_tv_pow" => params.v31_urgent_buy_tv_pow = value,
@@ -233,6 +260,9 @@ pub fn set_parameter(params: &mut TradingParameters, name: &str, value: f64) {
         "v31_urgent_sell_tv_mult" => params.v31_urgent_sell_tv_mult = value,
         "v31_sell_ready_price_rise" => params.v31_sell_ready_price_rise = value,
         "v31_sell_wait_max" => params.v31_sell_wait_max = value.round() as i32,
+        "v6_atr_stop_mult" => params.v6_atr_stop_mult = value,
+        "v6_atr_trail_mult" => params.v6_atr_trail_mult = value,
+        "v6_min_adx" => params.v6_min_adx = value,
         _ => {}
     }
 }
@@ -339,7 +369,11 @@ pub fn fast_non_dominated_sort(individuals: &[Individual]) -> Vec<Vec<usize>> {
 }
 
 /// Calculate crowding distance for a single front.
-pub fn calculate_crowding_distance(individuals: &mut [Individual], front: &[usize], num_objectives: usize) {
+pub fn calculate_crowding_distance(
+    individuals: &mut [Individual],
+    front: &[usize],
+    num_objectives: usize,
+) {
     let n = front.len();
     if n <= 2 {
         for &idx in front {
@@ -439,7 +473,11 @@ fn objective_value(name: &str, result: &SimulationResult) -> f64 {
         "total_return" => result.total_return,
         "win_rate" => result.win_rate,
         "profit_factor" => {
-            if result.profit_factor.is_finite() { result.profit_factor } else { 0.0 }
+            if result.profit_factor.is_finite() {
+                result.profit_factor
+            } else {
+                0.0
+            }
         }
         "total_trades" => result.total_trades as f64,
         "sharpe_ratio" => result.sharpe_ratio,
@@ -460,17 +498,33 @@ fn evaluate(
 
     // Full metrics map — always populated so the UI can render every
     // objective column regardless of which were selected for NSGA-II.
-    individual.metrics.insert("total_return".into(), result.total_return);
-    individual.metrics.insert("win_rate".into(), result.win_rate);
+    individual
+        .metrics
+        .insert("total_return".into(), result.total_return);
+    individual
+        .metrics
+        .insert("win_rate".into(), result.win_rate);
     individual.metrics.insert(
         "profit_factor".into(),
-        if result.profit_factor.is_finite() { result.profit_factor } else { 0.0 },
+        if result.profit_factor.is_finite() {
+            result.profit_factor
+        } else {
+            0.0
+        },
     );
-    individual.metrics.insert("total_trades".into(), result.total_trades as f64);
-    individual.metrics.insert("sharpe_ratio".into(), result.sharpe_ratio);
-    individual.metrics.insert("sortino_ratio".into(), result.sortino_ratio);
+    individual
+        .metrics
+        .insert("total_trades".into(), result.total_trades as f64);
+    individual
+        .metrics
+        .insert("sharpe_ratio".into(), result.sharpe_ratio);
+    individual
+        .metrics
+        .insert("sortino_ratio".into(), result.sortino_ratio);
     // Stored as raw (positive) — the UI only negates inside dominance math.
-    individual.metrics.insert("max_drawdown".into(), result.max_drawdown);
+    individual
+        .metrics
+        .insert("max_drawdown".into(), result.max_drawdown);
 
     // Objectives — respect the user-selected list; fall back to the default
     // 2-tuple (return, win_rate) when none are configured.
@@ -620,11 +674,14 @@ impl Nsga2Optimizer {
                 .collect();
 
             // Combine, non-dominated sort, crowding distance
-            let mut combined: Vec<Individual> = population.into_iter()
-                .chain(offspring.drain(..))
-                .collect();
+            let mut combined: Vec<Individual> =
+                population.into_iter().chain(offspring.drain(..)).collect();
             let fronts = fast_non_dominated_sort(&combined);
-            let num_objectives = if combined.is_empty() { 2 } else { combined[0].objectives.len() };
+            let num_objectives = if combined.is_empty() {
+                2
+            } else {
+                combined[0].objectives.len()
+            };
             for (rank, front) in fronts.iter().enumerate() {
                 for &idx in front {
                     combined[idx].rank = rank;
@@ -796,5 +853,11 @@ mod tests {
 
         set_parameter(&mut params, "v3_min_hold_bars", 42.0);
         assert_eq!(params.v3_min_hold_bars, 42);
+
+        set_parameter(&mut params, "v5_buy_psy_hour_lo", -0.25);
+        assert!((get_parameter(&params, "v5_buy_psy_hour_lo") + 0.25).abs() < 1e-10);
+
+        set_parameter(&mut params, "v6_atr_stop_mult", 2.75);
+        assert!((get_parameter(&params, "v6_atr_stop_mult") - 2.75).abs() < 1e-10);
     }
 }
